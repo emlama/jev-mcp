@@ -159,6 +159,9 @@ Policies:
   refresh token is revoked. Presenting an already-rotated refresh token is
   treated as reuse: every token sharing its `family_id` is revoked and the
   grant returns `invalid_grant`, so a leaked token cannot outlive its theft.
+  Reuse is caught as soon as the token is looked up (`load_refresh_token`),
+  which is the only point the SDK's `/token` route reaches for a revoked
+  token, and again in `exchange_refresh_token` as defense in depth.
 - Only SHA-256 hashes of tokens and codes are stored.
 - Authorization codes expire after 10 minutes and are single use.
 - Pending consents expire after 10 minutes.

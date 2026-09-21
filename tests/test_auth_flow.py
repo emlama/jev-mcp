@@ -84,9 +84,6 @@ def test_refresh_rotation_and_revocation(http, settings):
     new_tokens = refreshed.json()
     assert new_tokens["access_token"] != grant.access_token
 
-    replay = http.post("/token", data=refresh_data)
-    assert replay.status_code == 400
-
     assert McpClient(http, new_tokens["access_token"]).list_tools()["tools"]
 
     revoke = http.post("/revoke", data={"token": new_tokens["access_token"], "client_id": grant.client_id})
@@ -100,6 +97,41 @@ def test_refresh_rotation_and_revocation(http, settings):
         },
     )
     assert denied.status_code == 401
+
+
+def test_refresh_replay_revokes_the_family_over_http(http, settings):
+    """Replaying a rotated refresh token at /token burns the whole grant."""
+    grant = obtain_grant(http, settings)
+    refresh_data = {
+        "grant_type": "refresh_token", "refresh_token": grant.refresh_token, "client_id": grant.client_id
+    }
+    new_tokens = http.post("/token", data=refresh_data).json()
+    assert McpClient(http, new_tokens["access_token"]).list_tools()["tools"]
+
+    replay = http.post("/token", data=refresh_data)
+    assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
+
+    denied = http.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        headers={
+            "Authorization": f"Bearer {new_tokens['access_token']}",
+            "Accept": "application/json, text/event-stream",
+        },
+    )
+    assert denied.status_code == 401
+
+    # the replacement refresh token is dead too, so the agent must re-consent
+    retry = http.post(
+        "/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": new_tokens["refresh_token"],
+            "client_id": grant.client_id,
+        },
+    )
+    assert retry.status_code == 400
 
 
 def test_healthz_is_open(http):

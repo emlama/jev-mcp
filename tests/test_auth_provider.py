@@ -148,8 +148,11 @@ async def test_refresh_rotates_and_revokes_old_refresh_token(provider):
     second = await provider.exchange_refresh_token(client, refresh, [])
     assert second.access_token != first.access_token
     assert second.refresh_token != first.refresh_token
-    assert await provider.load_refresh_token(client, first.refresh_token) is None
     assert await provider.load_access_token(second.access_token) is not None
+
+    # Checked last, because presenting the rotated-away token is itself reuse and
+    # burns the family (test_refresh_reuse_revokes_the_whole_family covers that).
+    assert await provider.load_refresh_token(client, first.refresh_token) is None
 
     with pytest.raises(TokenError):
         await provider.exchange_refresh_token(client, refresh, [])

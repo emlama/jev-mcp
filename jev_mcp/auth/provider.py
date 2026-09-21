@@ -253,14 +253,37 @@ class SqliteOAuthProvider:
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
+        token_hash = tk.hash_token(refresh_token)
+        reused_family = None
         with self._db.tx() as conn:
             row = conn.execute(
                 "SELECT scopes_json, expires_at FROM oauth_tokens WHERE token_hash = ? "
                 "AND kind = 'refresh' AND client_id = ? AND revoked = 0 "
                 "AND (expires_at IS NULL OR expires_at > ?)",
-                (tk.hash_token(refresh_token), client.client_id, now_s()),
+                (token_hash, client.client_id, now_s()),
             ).fetchone()
+            if row is None:
+                # This is where the SDK's /token route turns a rotated-away refresh
+                # token into a plain invalid_grant, so reuse has to be caught here or
+                # it is never caught in production. Same transaction as the lookup.
+                replayed = conn.execute(
+                    "SELECT family_id FROM oauth_tokens WHERE token_hash = ? "
+                    "AND kind = 'refresh' AND client_id = ? AND revoked = 1",
+                    (token_hash, client.client_id),
+                ).fetchone()
+                if replayed is not None:
+                    conn.execute(
+                        "UPDATE oauth_tokens SET revoked = 1 WHERE family_id = ?",
+                        (replayed["family_id"],),
+                    )
+                    reused_family = replayed["family_id"]
         if row is None:
+            if reused_family is not None:
+                log.warning(
+                    "refresh token reuse detected; revoked token family %s for client %s",
+                    reused_family,
+                    client.client_id,
+                )
             return None
         return RefreshToken(
             token=refresh_token,
