@@ -90,6 +90,10 @@ def consent_handler(
             plural = "s" if remaining != 1 else ""
             error_msg = f"Wrong password ({remaining} attempt{plural} left)"
             return _form(pending, error=error_msg, status=401)
-        return RedirectResponse(provider.approve(request_id), status_code=302)
+        try:
+            redirect_url = provider.approve(request_id)
+        except LookupError:
+            return _expired()
+        return RedirectResponse(redirect_url, status_code=302)
 
     return handle

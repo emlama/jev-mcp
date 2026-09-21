@@ -123,3 +123,22 @@ def test_html_escapes_client_name(client, provider, settings):
     response = client.get("/consent", params={"request": request_id})
     assert "<script>" not in response.text
     assert "&lt;script&gt;" in response.text
+
+
+async def test_double_approval_returns_expired(client, provider):
+    request_id = await pending_request(provider)
+    # First approval succeeds
+    response1 = client.post(
+        "/consent",
+        data={"request": request_id, "password": "hunter2"},
+        follow_redirects=False,
+    )
+    assert response1.status_code == 302
+    # Second submission of the same form should get 400 expired
+    response2 = client.post(
+        "/consent",
+        data={"request": request_id, "password": "hunter2"},
+        follow_redirects=False,
+    )
+    assert response2.status_code == 400
+    assert "expired" in response2.text.lower()
