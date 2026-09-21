@@ -191,3 +191,28 @@ async def test_expiry_is_enforced(provider, monkeypatch):
 
     monkeypatch.setattr(provider_module, "now_s", lambda: real_now + 100_000)
     assert await provider.load_refresh_token(client, token.refresh_token) is None
+
+
+async def test_approve_is_atomic_rejects_deleted_pending(provider):
+    """Regression test: approve must atomically load and consume the pending request.
+    If the pending row is deleted (by record_failed_attempt reaching MAX_ATTEMPTS or TTL),
+    approve must not issue a code."""
+    client = make_client()
+    await provider.register_client(client)
+    request_id = request_id_from(await provider.authorize(client, make_params()))
+
+    # Record failed attempts until the pending row is deleted
+    for _attempt in range(1, MAX_ATTEMPTS + 1):
+        provider.record_failed_attempt(request_id)
+
+    # Pending should now be gone
+    assert provider.get_pending(request_id) is None
+
+    # approve should raise LookupError and NOT insert a code
+    with pytest.raises(LookupError):
+        provider.approve(request_id)
+
+    # Verify no code was inserted into oauth_codes
+    with provider._db.tx() as conn:
+        row = conn.execute("SELECT COUNT(*) as cnt FROM oauth_codes").fetchone()
+        assert row["cnt"] == 0

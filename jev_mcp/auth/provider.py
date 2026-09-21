@@ -88,13 +88,13 @@ class SqliteOAuthProvider:
             )
         return f"{self._settings.public_url}/consent?request={request_id}"
 
-    def get_pending(self, request_id: str) -> PendingAuth | None:
-        with self._db.tx() as conn:
-            row = conn.execute(
-                "SELECT p.id, p.params_json, p.attempts, c.client_info_json FROM oauth_pending p "
-                "JOIN oauth_clients c ON c.client_id = p.client_id WHERE p.id = ? AND p.expires_at > ?",
-                (request_id, now_s()),
-            ).fetchone()
+    def _load_pending(self, conn: sqlite3.Connection, request_id: str) -> PendingAuth | None:
+        """Load pending auth from database within an open transaction."""
+        row = conn.execute(
+            "SELECT p.id, p.params_json, p.attempts, c.client_info_json FROM oauth_pending p "
+            "JOIN oauth_clients c ON c.client_id = p.client_id WHERE p.id = ? AND p.expires_at > ?",
+            (request_id, now_s()),
+        ).fetchone()
         if row is None:
             return None
         return PendingAuth(
@@ -103,6 +103,10 @@ class SqliteOAuthProvider:
             params=AuthorizationParams.model_validate_json(row["params_json"]),
             attempts=row["attempts"],
         )
+
+    def get_pending(self, request_id: str) -> PendingAuth | None:
+        with self._db.tx() as conn:
+            return self._load_pending(conn, request_id)
 
     def record_failed_attempt(self, request_id: str) -> int:
         with self._db.tx() as conn:
@@ -114,22 +118,24 @@ class SqliteOAuthProvider:
         return attempts
 
     def approve(self, request_id: str) -> str:
-        pending = self.get_pending(request_id)
+        code = tk.new_token(32)
+        pending = None
+        with self._db.tx() as conn:
+            pending = self._load_pending(conn, request_id)
+            if pending is not None:
+                conn.execute("DELETE FROM oauth_pending WHERE id = ?", (request_id,))
+                conn.execute(
+                    "INSERT INTO oauth_codes (code_hash, client_id, params_json, expires_at, used) "
+                    "VALUES (?,?,?,?,0)",
+                    (
+                        tk.hash_token(code),
+                        pending.client.client_id,
+                        pending.params.model_dump_json(),
+                        now_s() + CODE_TTL,
+                    ),
+                )
         if pending is None:
             raise LookupError("pending authorization not found or expired")
-        code = tk.new_token(32)
-        with self._db.tx() as conn:
-            conn.execute("DELETE FROM oauth_pending WHERE id = ?", (request_id,))
-            conn.execute(
-                "INSERT INTO oauth_codes (code_hash, client_id, params_json, expires_at, used) "
-                "VALUES (?,?,?,?,0)",
-                (
-                    tk.hash_token(code),
-                    pending.client.client_id,
-                    pending.params.model_dump_json(),
-                    now_s() + CODE_TTL,
-                ),
-            )
         return construct_redirect_uri(
             str(pending.params.redirect_uri), code=code, state=pending.params.state
         )
@@ -162,6 +168,10 @@ class SqliteOAuthProvider:
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
+        # TokenError is a frozen dataclass from the SDK and cannot be raised from within
+        # the generator-based tx() context manager (Python's contextlib tries to set
+        # __traceback__ on the exception). Capture the error and raise after the block.
+        # No mutations may be added before the rowcount check, as an error path commits.
         result = None
         with self._db.tx() as conn:
             cur = conn.execute(
@@ -210,6 +220,10 @@ class SqliteOAuthProvider:
         if not set(requested) <= set(refresh_token.scopes):
             raise TokenError("invalid_scope", "requested scopes exceed the original grant")
         token_hash = tk.hash_token(refresh_token.token)
+        # TokenError is a frozen dataclass from the SDK and cannot be raised from within
+        # the generator-based tx() context manager (Python's contextlib tries to set
+        # __traceback__ on the exception). Capture the error and raise after the block.
+        # No mutations may be added before the rowcount check, as an error path commits.
         result = None
         with self._db.tx() as conn:
             row = conn.execute(
