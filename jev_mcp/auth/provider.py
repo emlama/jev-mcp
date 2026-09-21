@@ -267,21 +267,32 @@ class SqliteOAuthProvider:
         # TokenError is a frozen dataclass from the SDK and cannot be raised from within
         # the generator-based tx() context manager (Python's contextlib tries to set
         # __traceback__ on the exception). Capture the error and raise after the block.
-        # No mutations may be added before the rowcount check, as an error path commits.
+        # Error paths commit, which is deliberate for reuse: the family revocation must
+        # stick. Add no other mutation before a branch has decided what happened.
         result = None
         with self._db.tx() as conn:
             row = conn.execute(
-                "SELECT family_id FROM oauth_tokens WHERE token_hash = ?", (token_hash,)
+                "SELECT family_id, revoked FROM oauth_tokens WHERE token_hash = ?", (token_hash,)
             ).fetchone()
-            cur = conn.execute(
-                "UPDATE oauth_tokens SET revoked = 1 WHERE token_hash = ? AND revoked = 0",
-                (token_hash,),
-            )
-            if row is None or cur.rowcount == 0:
+            if row is None:
                 result = TokenError(
                     "invalid_grant", "refresh token is unknown, revoked, or already used"
                 )
+            elif row["revoked"]:
+                # A rotated-away refresh token came back: either it leaked or the client
+                # is replaying. Both mean the grant can no longer be trusted, so every
+                # token descended from the same authorization goes with it.
+                conn.execute(
+                    "UPDATE oauth_tokens SET revoked = 1 WHERE family_id = ?", (row["family_id"],)
+                )
+                result = TokenError(
+                    "invalid_grant",
+                    "refresh token reuse detected; all tokens for this authorization were revoked",
+                )
             else:
+                conn.execute(
+                    "UPDATE oauth_tokens SET revoked = 1 WHERE token_hash = ?", (token_hash,)
+                )
                 result = self._issue(conn, client.client_id, requested, family_id=row["family_id"])
                 self._purge(conn)  # after _issue: the new tokens keep this client alive
         if isinstance(result, TokenError):

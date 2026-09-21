@@ -2,6 +2,7 @@ import pytest
 from mcp.server.auth.provider import (
     AuthorizationParams,
     AuthorizeError,
+    RefreshToken,
     RegistrationError,
     TokenError,
 )
@@ -152,6 +153,40 @@ async def test_refresh_rotates_and_revokes_old_refresh_token(provider):
 
     with pytest.raises(TokenError):
         await provider.exchange_refresh_token(client, refresh, [])
+
+
+async def test_refresh_reuse_revokes_the_whole_family(provider):
+    client = make_client()
+    await provider.register_client(client)
+    first = await issue(provider, client)
+    stale = await provider.load_refresh_token(client, first.refresh_token)
+    second = await provider.exchange_refresh_token(client, stale, [])
+    assert await provider.load_access_token(second.access_token) is not None
+
+    with pytest.raises(TokenError) as exc:
+        await provider.exchange_refresh_token(client, stale, [])
+    assert exc.value.error == "invalid_grant"
+    assert "reuse detected" in (exc.value.error_description or "")
+
+    # the replay burned the tokens minted by the legitimate rotation
+    assert await provider.load_access_token(second.access_token) is None
+    assert await provider.load_refresh_token(client, second.refresh_token) is None
+
+
+async def test_unknown_refresh_token_is_a_plain_invalid_grant(provider):
+    client = make_client()
+    await provider.register_client(client)
+    token = await issue(provider, client)
+    live = await provider.load_refresh_token(client, token.refresh_token)
+    unknown = RefreshToken(
+        token="never-issued", client_id=client.client_id, scopes=["jev"], expires_at=None
+    )
+    with pytest.raises(TokenError) as exc:
+        await provider.exchange_refresh_token(client, unknown, [])
+    assert exc.value.error == "invalid_grant"
+    assert "reuse detected" not in (exc.value.error_description or "")
+    # an unknown token leaves the real grant alone
+    assert await provider.load_refresh_token(client, live.token) is not None
 
 
 async def test_refresh_rejects_scope_escalation(provider):

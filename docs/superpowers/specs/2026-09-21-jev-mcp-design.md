@@ -149,7 +149,9 @@ Policies:
 - Single scope `jev`. Every MCP tool requires it.
 - Access tokens are opaque 256-bit random strings, TTL 1 hour.
 - Refresh tokens are opaque, TTL 30 days, rotated on every use; the previous
-  refresh token is revoked.
+  refresh token is revoked. Presenting an already-rotated refresh token is
+  treated as reuse: every token sharing its `family_id` is revoked and the
+  grant returns `invalid_grant`, so a leaked token cannot outlive its theft.
 - Only SHA-256 hashes of tokens and codes are stored.
 - Authorization codes expire after 10 minutes and are single use.
 - Pending consents expire after 10 minutes.
