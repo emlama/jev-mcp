@@ -1,0 +1,57 @@
+flowchart TB
+    subgraph Agents["MCP clients · each agent gets its own OAuth client id"]
+        direction LR
+        Desktop["Claude Desktop / claude.ai"]
+        Code["Claude Code"]
+        Other["Any MCP client"]
+    end
+
+    Owner(["Owner in a browser"])
+
+    subgraph Container["jev-mcp container · Fly.io micro VM or Docker"]
+        subgraph HTTP["Starlette app · streamable HTTP · stateless"]
+            OAuth["OAuth 2.1 endpoints (MCP SDK)<br/>/register · /authorize · /token · /revoke<br/>/.well-known/*"]
+            Consent["/consent<br/>owner password page"]
+            MCP["/mcp<br/>bearer token required"]
+            Health["/healthz"]
+        end
+
+        Tools["server.py · eight static MCP tools<br/>ask_jev · create_tool · update_tool · get_tool<br/>list_tools · run_tool · delete_tool · tool_runs"]
+        Service["service.py · ToolService<br/>validate inputs · state = context + inputs<br/>call Jev · record run"]
+        Models["models.py + paths.py<br/>ToolSpec · noul / choice / score<br/>backtick path resolution"]
+        Repo["repo.py<br/>ToolRepo · RunRepo"]
+        Client["typesafe_client.py<br/>TypeSafeJevClient"]
+        Provider["auth/provider.py · SqliteOAuthProvider<br/>clients · pending consents · codes<br/>hashed access + refresh tokens"]
+        DB[("SQLite · /data/jev.db<br/>tools · runs · oauth_*")]
+    end
+
+    TypeSafe["TypeSafe API<br/>POST /v1/systemone · jev-latest"]
+
+    Agents ==>|"JSON-RPC over HTTPS"| MCP
+    Agents -.->|"register · authorize · token"| OAuth
+    OAuth -.->|"302"| Consent
+    Owner -.->|"approves each agent once"| Consent
+    Consent -.->|"mint code"| Provider
+    OAuth --> Provider
+    MCP -->|"verify token"| Provider
+    MCP ==> Tools
+    Tools ==> Service
+    Service --> Models
+    Service --> Repo
+    Service ==> Client
+    Repo --> DB
+    Provider --> DB
+    Health --> DB
+    Client ==>|"state + questions<br/>server-held API key"| TypeSafe
+
+    classDef ext fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b
+    classDef edge fill:#fff7ed,stroke:#ea580c,color:#431407
+    classDef core fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef auth fill:#fdf2f8,stroke:#db2777,color:#500724
+    classDef store fill:#f3f4f6,stroke:#4b5563,color:#111827
+
+    class Desktop,Code,Other,TypeSafe,Owner ext
+    class MCP,OAuth,Consent,Health edge
+    class Tools,Service,Models,Repo,Client core
+    class Provider auth
+    class DB store

@@ -1,0 +1,54 @@
+sequenceDiagram
+    autonumber
+    actor Owner
+    participant Agent as MCP client (agent)
+    participant OAuth as jev-mcp OAuth endpoints
+    participant Consent as /consent
+    participant MCP as /mcp tools
+    participant Svc as ToolService
+    participant DB as SQLite
+    participant TS as TypeSafe API
+
+    rect rgb(253, 242, 248)
+        note over Agent,DB: One-time authorization per agent
+        Agent->>OAuth: POST /register (client_name)
+        OAuth->>DB: store client
+        OAuth-->>Agent: client_id
+        Agent->>OAuth: GET /authorize (PKCE challenge, resource=/mcp)
+        OAuth->>DB: store pending consent (10 min)
+        OAuth-->>Agent: 302 → /consent?request=…
+        Agent->>Owner: opens browser
+        Owner->>Consent: enters owner password
+        Consent->>DB: delete pending, store hashed code
+        Consent-->>Agent: 302 → redirect_uri?code&state
+        Agent->>OAuth: POST /token (code + PKCE verifier)
+        OAuth->>DB: mark code used, store hashed access + refresh tokens
+        OAuth-->>Agent: access token (1 h) + refresh token (30 d)
+    end
+
+    rect rgb(236, 253, 245)
+        note over Agent,TS: Design once with ask_jev, then persist
+        Agent->>MCP: ask_jev(state, questions)
+        MCP->>Svc: validate questions and backtick paths
+        Svc->>TS: POST /v1/systemone
+        TS-->>Svc: typed answers + usage
+        Svc->>DB: log run (tool_name = null)
+        MCP-->>Agent: answers
+        Agent->>MCP: create_tool(name, docs, inputs, context, questions)
+        MCP->>Svc: validate ToolSpec
+        Svc->>DB: insert tool v1 (created_by = client_id)
+        MCP-->>Agent: saved definition
+    end
+
+    rect rgb(238, 242, 255)
+        note over Agent,TS: Any later session, any authorized agent
+        Agent->>MCP: list_tools → get_tool(name)
+        MCP-->>Agent: docs + declared inputs
+        Agent->>MCP: run_tool(name, inputs)
+        MCP->>Svc: check required inputs and JSON types
+        Svc->>DB: load tool
+        Svc->>TS: state = context + inputs, saved questions, model
+        TS-->>Svc: answers
+        Svc->>DB: log run (version, client_id, usage, latency)
+        MCP-->>Agent: answers + run_id
+    end
