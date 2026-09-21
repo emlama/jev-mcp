@@ -105,6 +105,32 @@ def test_runs_add_and_recent(db):
     assert len(runs.recent(limit=1)) == 1
 
 
+def _insert_old_run(db, run_id: str, created_at: str) -> None:
+    with db.tx() as conn:
+        conn.execute(
+            "INSERT INTO runs (id, tool_name, tool_version, client_id, inputs_json, answers_json, "
+            "model, input_tokens, output_tokens, latency_ms, error, created_at) "
+            "VALUES (?,NULL,NULL,'a','{}',NULL,'m',NULL,NULL,1,NULL,?)",
+            (run_id, created_at),
+        )
+
+
+def test_add_deletes_runs_past_the_retention_window(db):
+    _insert_old_run(db, "ancient", "2000-01-01T00:00:00Z")
+    runs = RunRepo(db, retention_days=90)
+    fresh = runs.add(tool_name=None, tool_version=None, client_id="a", inputs={}, answers=None, model="m",
+                     input_tokens=None, output_tokens=None, latency_ms=1, error=None)
+    assert [r.run_id for r in runs.recent()] == [fresh.run_id]
+
+
+def test_retention_zero_keeps_every_run(db):
+    _insert_old_run(db, "ancient", "2000-01-01T00:00:00Z")
+    runs = RunRepo(db, retention_days=0)
+    runs.add(tool_name=None, tool_version=None, client_id="a", inputs={}, answers=None, model="m",
+             input_tokens=None, output_tokens=None, latency_ms=1, error=None)
+    assert "ancient" in {r.run_id for r in runs.recent()}
+
+
 def test_recent_clamps_limit(db):
     runs = RunRepo(db)
     for _ in range(3):

@@ -78,7 +78,8 @@ def build_app(settings: Settings, *, jev: JevClient | None = None, db: Database 
     database = db or Database(settings.db_path)
     database.migrate()
     jev_client = jev or TypeSafeJevClient(settings.typesafe_api_key)
-    service = ToolService(ToolRepo(database), RunRepo(database), jev_client, settings.default_model)
+    runs = RunRepo(database, retention_days=settings.run_retention_days)
+    service = ToolService(ToolRepo(database), runs, jev_client, settings.default_model)
     provider = SqliteOAuthProvider(database, settings)
 
     srv = MCPServer(

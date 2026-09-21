@@ -194,13 +194,25 @@ oauth_pending(id TEXT PK, client_id, params_json, expires_at, attempts INT)
 oauth_codes(code_hash TEXT PK, client_id, params_json, expires_at, used INT)
 oauth_tokens(token_hash TEXT PK, kind TEXT, client_id, scopes_json,
              expires_at INT NULL, revoked INT, family_id TEXT, created_at)
+oauth_lockout(id INT PK CHECK (id = 1), failures INT, locked_until INT)
+healthcheck(id INT PK CHECK (id = 1), touched_at INT)
 ```
 
 Indexes on `runs(tool_name, created_at)`, `runs(created_at)`,
 `oauth_tokens(family_id)`, `oauth_pending(expires_at)`.
 
 Expired codes, pending consents, and tokens are purged opportunistically on
-each token request.
+each token request, along with client registrations that are more than 24
+hours old and hold neither an unrevoked token nor a pending consent (anyone
+can call `/register`, so those rows are bounded in lifetime as well as in
+size - registration metadata over 8 KB is rejected outright). The purge always
+runs after the current request has recorded whatever keeps its own client
+alive, so an in-flight authorization is never collected.
+
+Run history is swept on insert: `RunRepo.add` deletes rows older than
+`JEV_RUN_RETENTION_DAYS` (default 90, `0` disables) in the same transaction as
+the insert, so the table cannot grow without bound and needs no scheduler.
+Inputs for a single run are capped at 256 KB before TypeSafe is called.
 
 ## Configuration
 
@@ -218,7 +230,8 @@ key.
 | `JEV_DEFAULT_MODEL` | no | `jev-latest` | Default model for new tools and `ask_jev`. |
 | `JEV_ACCESS_TOKEN_TTL` | no | `3600` | Seconds. |
 | `JEV_REFRESH_TOKEN_TTL` | no | `2592000` | Seconds. |
-| `JEV_LOG_LEVEL` | no | `info` | |
+| `JEV_LOG_LEVEL` | no | `info` | One of `critical`, `error`, `warning`, `info`, `debug`, `trace`. |
+| `JEV_RUN_RETENTION_DAYS` | no | `90` | Run history older than this is deleted as new runs are recorded. `0` disables the sweep. |
 
 Startup fails fast with a clear message if a required variable is missing or
 `JEV_PUBLIC_URL` is not HTTPS (a `JEV_ALLOW_INSECURE_URL=1` escape hatch

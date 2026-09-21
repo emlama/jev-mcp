@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from pydantic import BaseModel
 
-from jev_mcp.db import Database, utc_now
+from jev_mcp.db import Database, utc_cutoff, utc_now
 from jev_mcp.models import ToolRecord, ToolSpec, ToolSummary, questions_to_wire
 
 
@@ -164,8 +165,9 @@ def _run(row: sqlite3.Row) -> RunRecord:
 
 
 class RunRepo:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, retention_days: int = 90) -> None:
         self._db = db
+        self._retention_days = retention_days
 
     def add(
         self,
@@ -202,6 +204,11 @@ class RunRepo:
                     utc_now(),
                 ),
             )
+            if self._retention_days > 0:
+                # Sweep in the same transaction as the insert: no scheduler to run, and
+                # the table only grows when something is writing to it anyway.
+                cutoff = utc_cutoff(timedelta(days=self._retention_days))
+                conn.execute("DELETE FROM runs WHERE created_at < ?", (cutoff,))
             row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return _run(row)
 

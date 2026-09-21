@@ -2,7 +2,7 @@ import pytest
 
 from jev_mcp.db import Database
 from jev_mcp.repo import RunRepo, ToolRepo
-from jev_mcp.service import ServiceError, ToolService
+from jev_mcp.service import MAX_RUN_INPUT_BYTES, ServiceError, ToolService
 from jev_mcp.typesafe_client import JevError
 from tests.fakes import FakeJevClient
 
@@ -161,3 +161,18 @@ def test_delete_and_list(service):
     assert service.list_tools() == []
     with pytest.raises(ServiceError):
         service.delete_tool("email_triage")
+
+
+async def test_run_tool_rejects_oversized_inputs(service, jev):
+    service.create_tool(PAYLOAD, "a")
+    oversized = {"email": {"body": "x" * (MAX_RUN_INPUT_BYTES + 1)}}
+    with pytest.raises(ServiceError, match="the limit is 262144"):
+        await service.run_tool("email_triage", oversized, "a")
+    assert jev.calls == []
+
+
+async def test_ask_rejects_oversized_state(service, jev):
+    oversized = {"blob": "x" * (MAX_RUN_INPUT_BYTES + 1)}
+    with pytest.raises(ServiceError, match="the limit is 262144"):
+        await service.ask(oversized, {"q": {"type": "noul", "instructions": "Is `blob` big?"}}, "a")
+    assert jev.calls == []

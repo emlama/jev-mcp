@@ -26,6 +26,7 @@ class Settings:
     access_token_ttl: int = 3600
     refresh_token_ttl: int = 2592000
     log_level: str = "info"
+    run_retention_days: int = 90
 
     @property
     def mcp_url(self) -> str:
@@ -53,6 +54,8 @@ class Settings:
                 "(set JEV_ALLOW_INSECURE_URL=1 to allow http:// for local development)"
             )
 
+        log_level = env.get("JEV_LOG_LEVEL", "info").strip().lower() or "info"
+
         return cls(
             typesafe_api_key=env["TYPESAFE_API_KEY"].strip(),
             owner_password=owner_password,
@@ -63,7 +66,8 @@ class Settings:
             default_model=env.get("JEV_DEFAULT_MODEL", "jev-latest").strip() or "jev-latest",
             access_token_ttl=_int(env, "JEV_ACCESS_TOKEN_TTL", 3600),
             refresh_token_ttl=_int(env, "JEV_REFRESH_TOKEN_TTL", 2592000),
-            log_level=env.get("JEV_LOG_LEVEL", "info").strip().lower() or "info",
+            log_level=log_level,
+            run_retention_days=_int(env, "JEV_RUN_RETENTION_DAYS", 90),
         )
 
 

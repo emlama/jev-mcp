@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -20,6 +21,7 @@ from jev_mcp.repo import RunRecord, RunRepo, ToolExists, ToolNotFound, ToolRepo
 from jev_mcp.typesafe_client import JevClient, JevError
 
 SPEC_FIELDS = ("title", "docs", "inputs", "context", "questions", "model")
+MAX_RUN_INPUT_BYTES = 262_144
 _QUESTIONS = TypeAdapter(QuestionMap)
 _JSON_TYPES: dict[str, type | tuple[type, ...]] = {"string": str, "object": dict, "array": list}
 
@@ -52,6 +54,13 @@ def validate_inputs(record: ToolRecord, inputs: Any) -> None:
         expected = record.inputs[name].type
         if not isinstance(value, _JSON_TYPES[expected]):
             raise ServiceError(f"input {name!r} must be a JSON {expected}, got {type(value).__name__}")
+
+
+def check_size(payload: Any) -> None:
+    """Reject inputs too big to be worth sending to TypeSafe or storing in a run row."""
+    size = len(json.dumps(payload))
+    if size > MAX_RUN_INPUT_BYTES:
+        raise ServiceError(f"inputs are {size} bytes; the limit is {MAX_RUN_INPUT_BYTES}")
 
 
 class ToolService:
@@ -118,6 +127,7 @@ class ToolService:
     async def run_tool(self, name: str, inputs: Any, client_id: str, model: str | None = None) -> RunResult:
         record = self.get_tool(name)
         validate_inputs(record, inputs)
+        check_size(inputs)
         state = {**record.context, **inputs}
         return await self._call(
             state,
@@ -132,6 +142,7 @@ class ToolService:
     async def ask(
         self, state: Any, questions: dict[str, Any], client_id: str, model: str | None = None
     ) -> RunResult:
+        check_size(state)
         try:
             validated = _QUESTIONS.validate_python(questions)
         except ValidationError as exc:

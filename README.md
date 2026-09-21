@@ -205,7 +205,8 @@ All configuration is by environment variable; `.env.example` documents every key
 | `JEV_DEFAULT_MODEL` | no | `jev-latest` | Default model for new tools and `ask_jev`. |
 | `JEV_ACCESS_TOKEN_TTL` | no | `3600` | Seconds. |
 | `JEV_REFRESH_TOKEN_TTL` | no | `2592000` | Seconds. |
-| `JEV_LOG_LEVEL` | no | `info` | |
+| `JEV_LOG_LEVEL` | no | `info` | One of `critical`, `error`, `warning`, `info`, `debug`, `trace`. |
+| `JEV_RUN_RETENTION_DAYS` | no | `90` | Run history older than this is deleted as new runs are recorded. `0` disables the sweep. |
 
 Startup fails fast with a clear message if a required variable is missing, or if `JEV_PUBLIC_URL` is not
 HTTPS (set `JEV_ALLOW_INSECURE_URL=1` to allow `http://` for local development only).
@@ -240,6 +241,9 @@ docker cp jev-mcp:/data/jev.db ./backup.db
 
 To restore, stop the server, copy the backup file back to the same path (`/data/jev.db` by default), and
 start the server again.
+
+Run history is self-limiting: each new run deletes rows older than `JEV_RUN_RETENTION_DAYS` (90 by
+default), so back up before lowering it if you want to keep the older history.
 
 ## Development
 

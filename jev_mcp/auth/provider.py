@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import timedelta
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -16,6 +17,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     AuthorizeError,
     RefreshToken,
+    RegistrationError,
     TokenError,
     construct_redirect_uri,
 )
@@ -23,7 +25,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from jev_mcp.auth import tokens as tk
 from jev_mcp.config import Settings
-from jev_mcp.db import Database, utc_now
+from jev_mcp.db import Database, utc_cutoff, utc_now
 
 PENDING_TTL = 600
 CODE_TTL = 600
@@ -35,6 +37,10 @@ SCOPE = "jev"
 LOCKOUT_THRESHOLD = 10
 LOCKOUT_BASE_SECONDS = 60
 LOCKOUT_MAX_SECONDS = 3600
+
+# Registration is open to anyone, so client rows are bounded in size and lifetime.
+MAX_CLIENT_METADATA_BYTES = 8192
+CLIENT_RETENTION = timedelta(hours=24)
 
 
 def now_s() -> int:  # indirection so tests can freeze time
@@ -64,11 +70,14 @@ class SqliteOAuthProvider:
         return OAuthClientInformationFull.model_validate_json(row["client_info_json"]) if row else None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        payload = client_info.model_dump_json()
+        if len(payload) > MAX_CLIENT_METADATA_BYTES:
+            raise RegistrationError("invalid_client_metadata", "client metadata too large")
         with self._db.tx() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO oauth_clients (client_id, client_name, client_info_json, created_at) "
                 "VALUES (?,?,?,?)",
-                (client_info.client_id, client_info.client_name, client_info.model_dump_json(), utc_now()),
+                (client_info.client_id, client_info.client_name, payload, utc_now()),
             )
 
     def client_name(self, client_id: str) -> str | None:
@@ -86,12 +95,14 @@ class SqliteOAuthProvider:
             raise AuthorizeError("invalid_target", msg)
         request_id = tk.new_token(16)
         with self._db.tx() as conn:
-            self._purge(conn)
+            # Insert before purging: the pending row is what stops _purge from
+            # collecting this client if it registered more than a day ago.
             conn.execute(
                 "INSERT INTO oauth_pending (id, client_id, params_json, expires_at, attempts) "
                 "VALUES (?,?,?,?,0)",
                 (request_id, client.client_id, params.model_dump_json(), now_s() + PENDING_TTL),
             )
+            self._purge(conn)
         return f"{self._settings.public_url}/consent?request={request_id}"
 
     def _load_pending(self, conn: sqlite3.Connection, request_id: str) -> PendingAuth | None:
@@ -216,10 +227,10 @@ class SqliteOAuthProvider:
                     "invalid_grant", "authorization code is unknown or already used"
                 )
             else:
-                self._purge(conn)
                 result = self._issue(
                     conn, client.client_id, authorization_code.scopes, family_id=tk.new_token(16)
                 )
+                self._purge(conn)  # after _issue: the new tokens keep this client alive
         if isinstance(result, TokenError):
             raise result
         return result
@@ -271,8 +282,8 @@ class SqliteOAuthProvider:
                     "invalid_grant", "refresh token is unknown, revoked, or already used"
                 )
             else:
-                self._purge(conn)
                 result = self._issue(conn, client.client_id, requested, family_id=row["family_id"])
+                self._purge(conn)  # after _issue: the new tokens keep this client alive
         if isinstance(result, TokenError):
             raise result
         return result
@@ -349,7 +360,19 @@ class SqliteOAuthProvider:
 
     @staticmethod
     def _purge(conn: sqlite3.Connection) -> None:
+        """Drop expired state and abandoned registrations.
+
+        Callers must have already recorded whatever keeps the current client alive
+        (its pending row or its freshly issued tokens) in this same transaction,
+        because a client with neither is exactly what the last statement deletes.
+        """
         now = now_s()
         conn.execute("DELETE FROM oauth_pending WHERE expires_at <= ?", (now,))
         conn.execute("DELETE FROM oauth_codes WHERE expires_at <= ?", (now,))
         conn.execute("DELETE FROM oauth_tokens WHERE expires_at IS NOT NULL AND expires_at <= ?", (now,))
+        conn.execute(
+            "DELETE FROM oauth_clients WHERE created_at < ? "
+            "AND client_id NOT IN (SELECT client_id FROM oauth_tokens WHERE revoked = 0) "
+            "AND client_id NOT IN (SELECT client_id FROM oauth_pending)",
+            (utc_cutoff(CLIENT_RETENTION),),
+        )

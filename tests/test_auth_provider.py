@@ -1,5 +1,10 @@
 import pytest
-from mcp.server.auth.provider import AuthorizationParams, AuthorizeError, TokenError
+from mcp.server.auth.provider import (
+    AuthorizationParams,
+    AuthorizeError,
+    RegistrationError,
+    TokenError,
+)
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -197,6 +202,36 @@ async def test_expiry_is_enforced(provider, monkeypatch):
 
     monkeypatch.setattr(provider_module, "now_s", lambda: real_now + 100_000)
     assert await provider.load_refresh_token(client, token.refresh_token) is None
+
+
+async def test_register_client_rejects_oversized_metadata(provider):
+    bloated = OAuthClientInformationFull(
+        client_id="fat-client",
+        client_name="x" * 9000,
+        redirect_uris=[AnyUrl(CALLBACK)],
+        token_endpoint_auth_method="none",
+        grant_types=["authorization_code"],
+    )
+    with pytest.raises(RegistrationError) as exc:
+        await provider.register_client(bloated)
+    assert exc.value.error == "invalid_client_metadata"
+    assert await provider.get_client("fat-client") is None
+
+
+async def test_stale_clients_without_tokens_are_purged(provider):
+    live, stale = make_client("live-client"), make_client("stale-client")
+    await provider.register_client(live)
+    await provider.register_client(stale)
+    with provider._db.tx() as conn:  # both registered more than 24 hours ago
+        conn.execute("UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z'")
+    fresh = make_client("fresh-client")
+    await provider.register_client(fresh)
+
+    await issue(provider, live)  # the code exchange purges
+
+    assert await provider.get_client("live-client") is not None  # holds live tokens
+    assert await provider.get_client("fresh-client") is not None  # registered just now
+    assert await provider.get_client("stale-client") is None
 
 
 async def test_global_failures_lock_consent_after_threshold(provider, monkeypatch):
