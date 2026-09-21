@@ -155,8 +155,9 @@ Policies:
 - Pending consents expire after 10 minutes.
 - Resource indicator validation is on: tokens are bound to the configured
   public URL.
-- The owner password is compared with a constant-time function. Failed
-  consent attempts are rate limited to 5 per 15 minutes per client id.
+- The owner password is compared with a constant-time function. After 5
+  failed attempts a pending consent is deleted and the agent must restart
+  the connection (pending consents already expire after 10 minutes).
 - The `client_id` on the access token is the agent identity recorded on tools
   and runs. The client's registered `client_name` is stored so `tool_runs`
   and `get_tool` can show a readable agent name.
