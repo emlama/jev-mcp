@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-BACKTICK_RE = re.compile(r"`([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*|\[\d+\])*)`")
+BACKTICK_RE = re.compile(r"`([^`\n]*)`")
 ROOT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -19,7 +19,7 @@ def backtick_paths(value: Any) -> set[str]:
 
 def _walk(value: Any, found: set[str]) -> None:
     if isinstance(value, str):
-        found.update(m.group(1) for m in BACKTICK_RE.finditer(value))
+        found.update(m.group(1) for m in BACKTICK_RE.finditer(value) if m.group(1))
     elif isinstance(value, Mapping):
         for item in value.values():
             _walk(item, found)

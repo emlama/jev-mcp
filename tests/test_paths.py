@@ -30,3 +30,16 @@ def test_unresolved_roots_reports_question_and_root():
     }
     result = unresolved_roots(questions, {"email", "policy"})
     assert result == [("q2", "missing"), ("q3", "other")]
+
+
+def test_backtick_paths_captures_non_identifier_characters():
+    """Regression: backticked spans with hyphens and brackets should be captured."""
+    result = backtick_paths('see `unknownfield.body-text` and `context["some-key"]`')
+    assert result == {"unknownfield.body-text", 'context["some-key"]'}
+    # path_root extracts leading identifier, ignoring characters that don't look like paths
+    assert path_root("unknownfield.body-text") == "unknownfield"
+    assert path_root('context["some-key"]') == "context"
+    # unresolved_roots detects the leading identifier when not in known keys
+    questions = {"q": {"type": "noul", "instructions": "Is `unknownfield.body-text` ok?"}}
+    result = unresolved_roots(questions, {"email"})
+    assert result == [("q", "unknownfield")]
