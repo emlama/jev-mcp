@@ -34,6 +34,15 @@ class Settings:
     def mcp_url(self) -> str:
         return f"{self.public_url}/mcp"
 
+    @property
+    def stdlib_log_level(self) -> str:
+        """log_level as the standard library spells it.
+
+        uvicorn accepts "trace"; `logging` does not and raises on it, so the root
+        logger gets the nearest level it knows.
+        """
+        return "DEBUG" if self.log_level == "trace" else self.log_level.upper()
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         env = os.environ if env is None else env

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from jev_mcp.config import ConfigError, Settings
@@ -79,6 +81,15 @@ def test_unknown_log_level_rejected():
 def test_known_log_levels_accepted():
     for level in ("critical", "error", "warning", "info", "debug", "trace"):
         assert Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": level.upper()}).log_level == level
+
+
+def test_stdlib_log_level_maps_trace_to_debug():
+    # uvicorn understands "trace"; logging.basicConfig raises ValueError on it.
+    assert Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": "trace"}).stdlib_log_level == "DEBUG"
+    assert Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": "warning"}).stdlib_log_level == "WARNING"
+    for level in ("critical", "error", "warning", "info", "debug", "trace"):
+        name = Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": level}).stdlib_log_level
+        assert isinstance(logging.getLevelName(name), int)  # a name basicConfig accepts
 
 
 def test_public_url_with_a_path_rejected():

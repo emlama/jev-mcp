@@ -231,7 +231,7 @@ key.
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `TYPESAFE_API_KEY` | yes | | Server-held key used for every TypeSafe call. |
-| `JEV_OWNER_PASSWORD` | yes | | Password entered on the consent page. |
+| `JEV_OWNER_PASSWORD` | yes | | Password entered on the consent page. At least 12 characters; generate one with `openssl rand -base64 24`. |
 | `JEV_PUBLIC_URL` | yes | | Externally reachable HTTPS base URL, e.g. `https://jev.example.com`. Used as OAuth issuer and resource. |
 | `JEV_DB_PATH` | no | `/data/jev.db` | SQLite file path. |
 | `JEV_HOST` | no | `0.0.0.0` | Bind address. |

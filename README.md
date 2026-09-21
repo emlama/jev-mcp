@@ -200,7 +200,7 @@ All configuration is by environment variable; `.env.example` documents every key
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `TYPESAFE_API_KEY` | yes | | Server-held key used for every TypeSafe call. |
-| `JEV_OWNER_PASSWORD` | yes | | Password entered on the consent page. |
+| `JEV_OWNER_PASSWORD` | yes | | Password entered on the consent page. At least 12 characters; generate one with `openssl rand -base64 24`. |
 | `JEV_PUBLIC_URL` | yes | | Externally reachable HTTPS base URL, e.g. `https://jev.example.com`. Used as OAuth issuer and resource. |
 | `JEV_DB_PATH` | no | `/data/jev.db` | SQLite file path. |
 | `JEV_HOST` | no | `0.0.0.0` | Bind address. |
@@ -211,8 +211,10 @@ All configuration is by environment variable; `.env.example` documents every key
 | `JEV_LOG_LEVEL` | no | `info` | One of `critical`, `error`, `warning`, `info`, `debug`, `trace`. |
 | `JEV_RUN_RETENTION_DAYS` | no | `90` | Run history older than this is deleted as new runs are recorded. `0` disables the sweep. |
 
-Startup fails fast with a clear message if a required variable is missing, or if `JEV_PUBLIC_URL` is not
-HTTPS (set `JEV_ALLOW_INSECURE_URL=1` to allow `http://` for local development only).
+Startup fails fast with a message naming the variable at fault: a required variable missing, an owner
+password under 12 characters, a `JEV_PUBLIC_URL` that is not HTTPS (set `JEV_ALLOW_INSECURE_URL=1` to
+allow `http://` for local development only) or that carries a path (the OAuth endpoints live at the
+root), an unknown log level, a non-positive port or token TTL, or a negative retention.
 
 ## Security notes
 
@@ -220,7 +222,12 @@ HTTPS (set `JEV_ALLOW_INSECURE_URL=1` to allow `http://` for local development o
   identity provider is required.
 - Access and refresh tokens are hashed at rest in SQLite — the raw token is never stored.
 - One owner password gates every agent's consent; anyone who knows it can authorize a new agent, so treat
-  it like any other server credential.
+  it like any other server credential. It must be at least 12 characters, and guessing is bounded twice
+  over: 5 attempts per consent request, and 10 failures server-wide lock the consent page for everyone
+  (right password included) with an exponential backoff from 1 minute to 1 hour. A successful consent
+  clears the lock.
+- Wrong passwords, rejected registrations, approvals, token issuance, and token revocations are logged
+  with client and family identifiers. Token values, authorization codes, and the password never are.
 - The TypeSafe API key never leaves the server — agents send state and questions, and the server makes the
   TypeSafe call on their behalf.
 - Run only behind HTTPS in production; `JEV_PUBLIC_URL` doubles as the OAuth issuer, so it must be the

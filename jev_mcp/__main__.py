@@ -16,7 +16,7 @@ def main() -> None:
     except ConfigError as exc:
         raise SystemExit(f"jev-mcp: {exc}") from exc
     log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    logging.basicConfig(level=settings.log_level.upper(), format=log_format)
+    logging.basicConfig(level=settings.stdlib_log_level, format=log_format)
     app = build_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=settings.log_level)
 
