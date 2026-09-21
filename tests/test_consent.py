@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -185,3 +186,25 @@ async def test_double_approval_returns_expired(client, provider):
     )
     assert response2.status_code == 400
     assert "expired" in response2.text.lower()
+
+
+async def test_pages_carry_security_headers(client, provider):
+    request_id = await pending_request(provider)
+    response = client.get("/consent", params={"request": request_id})
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["content-security-policy"] == (
+        "frame-ancestors 'none'; default-src 'none'; style-src 'unsafe-inline'"
+    )
+
+
+async def test_wrong_password_is_logged_without_the_password(client, provider, caplog):
+    request_id = await pending_request(provider)
+    with caplog.at_level(logging.WARNING, logger="jev_mcp.auth.consent"):
+        client.post("/consent", data={"request": request_id, "password": "hunter2-is-wrong"})
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, caplog.text
+    message = warnings[-1].getMessage()
+    assert "client-1" in message
+    assert "hunter2-is-wrong" not in message
+    assert "correct-horse-battery" not in message

@@ -106,3 +106,15 @@ def test_healthz_is_open(http):
     response = http.get("/healthz")
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+def test_healthz_proves_the_database_is_writable(http, db):
+    assert http.get("/healthz").status_code == 200
+    with db.tx() as conn:
+        touched = conn.execute("SELECT touched_at FROM healthcheck WHERE id = 1").fetchone()
+    assert touched["touched_at"] > 0
+
+    db.close()  # a database it cannot write is not healthy
+    response = http.get("/healthz")
+    assert response.status_code == 503
+    assert response.json()["ok"] is False

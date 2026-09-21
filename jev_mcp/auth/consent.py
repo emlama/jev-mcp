@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from html import escape
@@ -15,6 +16,8 @@ from jev_mcp.auth import provider as provider_module
 from jev_mcp.auth.provider import MAX_ATTEMPTS, PendingAuth, SqliteOAuthProvider
 from jev_mcp.config import Settings
 
+log = logging.getLogger(__name__)
+
 _STYLE = (
     "body{font-family:system-ui,sans-serif;background:#f6f7f9;color:#1c1e21;display:flex;justify-content:center;"
     "padding:4rem 1rem}main{background:#fff;border:1px solid #d9dce1;border-radius:12px;padding:2rem;"
@@ -26,12 +29,21 @@ _STYLE = (
 )
 
 
+# The page carries a password field and a request id, so it must not be cached, leak
+# its URL through a referer, or be framed. Inline CSS is the only resource it loads.
+_SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "frame-ancestors 'none'; default-src 'none'; style-src 'unsafe-inline'",
+}
+
+
 def _html(title: str, body: str, status: int = 200) -> HTMLResponse:
     page = (
         "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
         f"<title>{escape(title)}</title><style>{_STYLE}</style></head><body><main>{body}</main></body></html>"
     )
-    return HTMLResponse(page, status_code=status)
+    return HTMLResponse(page, status_code=status, headers=dict(_SECURITY_HEADERS))
 
 
 def _locked(seconds_left: int) -> HTMLResponse:
@@ -99,7 +111,15 @@ def consent_handler(
         pwd_setting_bytes = settings.owner_password.encode("utf-8")
         if not hmac.compare_digest(pwd_bytes, pwd_setting_bytes):
             attempts = provider.record_failed_attempt(request_id)
-            provider.record_global_failure()
+            locked = provider.record_global_failure()
+            log.warning(
+                "wrong owner password for client %s (%s): %d attempt(s) on this request; "
+                "global lockout %s",
+                pending.client.client_id,
+                pending.client.client_name or "unnamed",
+                attempts,
+                "engaged" if locked else "not engaged",
+            )
             if attempts >= MAX_ATTEMPTS:
                 locked_msg = (
                     "<h1>Too many failed attempts</h1>"
@@ -115,6 +135,7 @@ def consent_handler(
         except LookupError:
             return _expired()
         provider.reset_global_failures()
+        log.info("consent approved for client %s", pending.client.client_id)
         return RedirectResponse(redirect_url, status_code=302)
 
     return handle

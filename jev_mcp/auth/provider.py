@@ -7,6 +7,7 @@ client authentication). This class owns persistence and the consent handshake.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import timedelta
@@ -26,6 +27,9 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from jev_mcp.auth import tokens as tk
 from jev_mcp.config import Settings
 from jev_mcp.db import Database, utc_cutoff, utc_now
+
+# Audit trail. Never log a token, a code, or the owner password - only identifiers.
+log = logging.getLogger(__name__)
 
 PENDING_TTL = 600
 CODE_TTL = 600
@@ -72,6 +76,12 @@ class SqliteOAuthProvider:
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         payload = client_info.model_dump_json()
         if len(payload) > MAX_CLIENT_METADATA_BYTES:
+            log.warning(
+                "rejected registration for client %s: metadata is %d bytes, the limit is %d",
+                client_info.client_id,
+                len(payload),
+                MAX_CLIENT_METADATA_BYTES,
+            )
             raise RegistrationError("invalid_client_metadata", "client metadata too large")
         with self._db.tx() as conn:
             conn.execute(
@@ -79,6 +89,7 @@ class SqliteOAuthProvider:
                 "VALUES (?,?,?,?)",
                 (client_info.client_id, client_info.client_name, payload, utc_now()),
             )
+        log.info("registered client %s (%s)", client_info.client_id, client_info.client_name or "unnamed")
 
     def client_name(self, client_id: str) -> str | None:
         with self._db.tx() as conn:
@@ -217,6 +228,7 @@ class SqliteOAuthProvider:
         # __traceback__ on the exception). Capture the error and raise after the block.
         # No mutations may be added before the rowcount check, as an error path commits.
         result = None
+        family_id = tk.new_token(16)
         with self._db.tx() as conn:
             cur = conn.execute(
                 "UPDATE oauth_codes SET used = 1 WHERE code_hash = ? AND used = 0",
@@ -228,11 +240,12 @@ class SqliteOAuthProvider:
                 )
             else:
                 result = self._issue(
-                    conn, client.client_id, authorization_code.scopes, family_id=tk.new_token(16)
+                    conn, client.client_id, authorization_code.scopes, family_id=family_id
                 )
                 self._purge(conn)  # after _issue: the new tokens keep this client alive
         if isinstance(result, TokenError):
             raise result
+        log.info("issued tokens to client %s by code exchange (family %s)", client.client_id, family_id)
         return result
 
     # ----- refresh tokens
@@ -285,6 +298,7 @@ class SqliteOAuthProvider:
                 conn.execute(
                     "UPDATE oauth_tokens SET revoked = 1 WHERE family_id = ?", (row["family_id"],)
                 )
+                log.info("revoked token family %s (reason: refresh reuse)", row["family_id"])
                 result = TokenError(
                     "invalid_grant",
                     "refresh token reuse detected; all tokens for this authorization were revoked",
@@ -297,6 +311,9 @@ class SqliteOAuthProvider:
                 self._purge(conn)  # after _issue: the new tokens keep this client alive
         if isinstance(result, TokenError):
             raise result
+        log.info(
+            "issued tokens to client %s by refresh (family %s)", client.client_id, row["family_id"]
+        )
         return result
 
     # ----- access tokens
@@ -320,12 +337,18 @@ class SqliteOAuthProvider:
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
+        token_hash = tk.hash_token(token.token)
         with self._db.tx() as conn:
+            row = conn.execute(
+                "SELECT family_id FROM oauth_tokens WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
             conn.execute(
                 "UPDATE oauth_tokens SET revoked = 1 WHERE family_id = "
                 "(SELECT family_id FROM oauth_tokens WHERE token_hash = ?)",
-                (tk.hash_token(token.token),),
+                (token_hash,),
             )
+        if row is not None:
+            log.info("revoked token family %s (reason: revoke endpoint)", row["family_id"])
 
     # ----- helpers
 

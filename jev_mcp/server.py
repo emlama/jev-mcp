@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -60,15 +61,23 @@ def _patch_mcp_revocation_client_secret_bug() -> None:
     required" before the provider is ever consulted. Give the field the same default
     used elsewhere in the SDK by swapping in a subclass; remove this once upstream
     ships a fixed release.
+
+    This rebinds an attribute on an SDK module, so it takes effect process-wide for
+    every MCP server in this interpreter, not just the app built here. If the SDK
+    moves or renames what it reaches for, the patch quietly does nothing and upstream
+    behaviour stands - a 400 on /revoke is a far better failure than a crash at import.
     """
-    import mcp.server.auth.handlers.revoke as revoke_module
+    try:
+        import mcp.server.auth.handlers.revoke as revoke_module
 
-    if revoke_module.RevocationRequest.model_fields["client_secret"].is_required():
+        if revoke_module.RevocationRequest.model_fields["client_secret"].is_required():
 
-        class _FixedRevocationRequest(revoke_module.RevocationRequest):
-            client_secret: str | None = None
+            class _FixedRevocationRequest(revoke_module.RevocationRequest):
+                client_secret: str | None = None
 
-        revoke_module.RevocationRequest = _FixedRevocationRequest
+            revoke_module.RevocationRequest = _FixedRevocationRequest
+    except (ImportError, AttributeError, KeyError):
+        return
 
 
 _patch_mcp_revocation_client_secret_bug()
@@ -105,8 +114,13 @@ def build_app(settings: Settings, *, jev: JevClient | None = None, db: Database 
     @srv.custom_route("/healthz", methods=["GET"])
     async def healthz(_: Request) -> JSONResponse:
         try:
+            # A write, not a read: a full or read-only volume is the failure this
+            # check exists to catch, and SELECT 1 would sail straight past it.
             with database.tx() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(
+                    "INSERT OR REPLACE INTO healthcheck (id, touched_at) VALUES (1, ?)",
+                    (int(time.time()),),
+                )
         except Exception:  # noqa: BLE001 - health check must never raise
             return JSONResponse({"ok": False}, status_code=503)
         return JSONResponse({"ok": True, "version": __version__})

@@ -140,9 +140,16 @@ Endpoints (all served by the SDK unless noted):
 - `GET|POST /consent` (this project) shows the requesting client's name and
   redirect host, asks for the owner password, and on success mints an
   authorization code and redirects to the client's `redirect_uri` with
-  `code` and `state`
+  `code` and `state`. Every HTML response sends `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer`, and a `Content-Security-Policy` of
+  `frame-ancestors 'none'; default-src 'none'; style-src 'unsafe-inline'`
 - `POST /token` authorization-code and refresh-token grants with PKCE
 - `POST /revoke`
+
+All of this is audited through module loggers: wrong passwords and rejected
+registrations at WARNING, registrations, approvals, token issuance and family
+revocations at INFO. Token values, authorization codes, and the password are
+never logged - only client ids, client names, and family ids.
 
 Policies:
 
@@ -235,9 +242,13 @@ key.
 | `JEV_LOG_LEVEL` | no | `info` | One of `critical`, `error`, `warning`, `info`, `debug`, `trace`. |
 | `JEV_RUN_RETENTION_DAYS` | no | `90` | Run history older than this is deleted as new runs are recorded. `0` disables the sweep. |
 
-Startup fails fast with a clear message if a required variable is missing or
-`JEV_PUBLIC_URL` is not HTTPS (a `JEV_ALLOW_INSECURE_URL=1` escape hatch
-exists for local development).
+Startup fails fast with a message naming the offending variable when a required
+one is missing; `JEV_OWNER_PASSWORD` is under 12 characters; `JEV_PUBLIC_URL` is
+not HTTPS (a `JEV_ALLOW_INSECURE_URL=1` escape hatch exists for local
+development) or carries a path, query, or fragment (the SDK mounts the OAuth
+routes at the root); `JEV_LOG_LEVEL` is outside the list above; `JEV_PORT`,
+`JEV_ACCESS_TOKEN_TTL`, or `JEV_REFRESH_TOKEN_TTL` is not positive; or
+`JEV_RUN_RETENTION_DAYS` is negative.
 
 ## Code layout
 
@@ -291,9 +302,11 @@ network access.
 
 ## Deployment
 
-- `Dockerfile`: `python:3.12-slim`, install with `uv`, non-root user, `/data`
-  volume mount point, `CMD ["python", "-m", "jev_mcp"]`, `HEALTHCHECK` on
-  `GET /healthz`.
+- `Dockerfile`: `python:3.12-slim`, install with `uv`, `/data` volume mount
+  point, `CMD ["python", "-m", "jev_mcp"]`, `HEALTHCHECK` on `GET /healthz` at
+  `${JEV_PORT:-8080}`. The process runs as root because Fly and Docker mount
+  volumes root-owned and the slim image ships no `gosu`; the README documents
+  how to run non-root where the host allows it.
 - `docker-compose.yml`: one service, env from `.env`, named volume at
   `/data`, port 8080. Suitable for any VPS behind a TLS-terminating proxy.
 - `fly.toml`: single `shared-cpu-1x` machine, `[mounts]` volume `jev_data` at
@@ -305,8 +318,10 @@ network access.
   adding the connector in Claude Desktop and claude.ai, the agent workflow,
   the tool reference, and how to back up the SQLite file.
 
-`GET /healthz` returns `{"ok": true}` without auth and checks the database is
-writable.
+`GET /healthz` returns `{"ok": true}` without auth. It proves the database is
+*writable*, not merely reachable, by upserting the single row of a `healthcheck`
+table inside a transaction; any exception answers 503 so an orchestrator
+replaces a machine whose volume has gone read-only or full.
 
 ## Testing strategy
 

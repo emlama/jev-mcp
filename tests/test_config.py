@@ -68,3 +68,48 @@ def test_short_owner_password_rejected():
 def test_twelve_character_owner_password_accepted():
     s = Settings.from_env({**REQUIRED, "JEV_OWNER_PASSWORD": "123456789012"})
     assert s.owner_password == "123456789012"
+
+
+def test_unknown_log_level_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": "chatty"})
+    assert "JEV_LOG_LEVEL" in str(exc.value)
+
+
+def test_known_log_levels_accepted():
+    for level in ("critical", "error", "warning", "info", "debug", "trace"):
+        assert Settings.from_env({**REQUIRED, "JEV_LOG_LEVEL": level.upper()}).log_level == level
+
+
+def test_public_url_with_a_path_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_PUBLIC_URL": "https://jev.example.com/jev"})
+    assert "JEV_PUBLIC_URL" in str(exc.value)
+
+
+def test_non_positive_port_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_PORT": "0"})
+    assert "JEV_PORT" in str(exc.value)
+
+
+def test_non_positive_access_token_ttl_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_ACCESS_TOKEN_TTL": "0"})
+    assert "JEV_ACCESS_TOKEN_TTL" in str(exc.value)
+
+
+def test_non_positive_refresh_token_ttl_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_REFRESH_TOKEN_TTL": "-1"})
+    assert "JEV_REFRESH_TOKEN_TTL" in str(exc.value)
+
+
+def test_negative_run_retention_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_RUN_RETENTION_DAYS": "-1"})
+    assert "JEV_RUN_RETENTION_DAYS" in str(exc.value)
+
+
+def test_zero_run_retention_allowed():
+    assert Settings.from_env({**REQUIRED, "JEV_RUN_RETENTION_DAYS": "0"}).run_retention_days == 0
