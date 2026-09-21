@@ -22,6 +22,7 @@ from jev_mcp.auth.consent import consent_handler
 from jev_mcp.auth.provider import SCOPE, SqliteOAuthProvider
 from jev_mcp.config import Settings
 from jev_mcp.db import Database
+from jev_mcp.guide import GUIDE_URI, load_guide
 from jev_mcp.models import ToolRecord
 from jev_mcp.repo import RunRepo, ToolRepo
 from jev_mcp.service import ServiceError, ToolService
@@ -33,8 +34,9 @@ across sessions.
 Workflow:
 1. Call list_tools first. If a saved tool fits, call get_tool to read its docs, then run_tool with the
    declared inputs.
-2. To design a new judgment, iterate with ask_jev (state + questions, nothing is saved) until the
-   answers look right.
+2. Before designing a new judgment, call get_guide once: it returns TypeSafe's official agent skill
+   plus how it maps onto these tools. Then iterate with ask_jev (state + questions, nothing is saved)
+   until the answers look right.
 3. Persist it with create_tool: declare inputs (what callers pass at run time), optional context
    (policies, definitions, examples that never change), the questions, and docs that explain purpose,
    when to use it, and how to read the answers.
@@ -292,3 +294,25 @@ def _register_tools(srv: MCPServer, service: ToolService, provider: SqliteOAuthP
             view["client_name"] = provider.client_name(run.client_id)
             runs.append(view)
         return {"runs": runs}
+
+    @srv.tool(
+        description=(
+            "Read the guide to designing jev tools: TypeSafe's official agent skill (how to find the "
+            "useful shape of a judgment, design atomic questions, structure state, and use probabilities "
+            "and confidence) plus a short section mapping it onto this server's tools and the exact "
+            "question shapes. Call it once before designing a new tool. Also available as the resource "
+            f"{GUIDE_URI}."
+        )
+    )
+    async def get_guide() -> dict[str, Any]:
+        return {"uri": GUIDE_URI, "guide": load_guide()}
+
+    @srv.resource(
+        GUIDE_URI,
+        name="guide",
+        title="Guide to designing jev tools",
+        description="TypeSafe's agent skill plus how it maps onto jev-mcp's tools.",
+        mime_type="text/markdown",
+    )
+    def guide_resource() -> str:
+        return load_guide()

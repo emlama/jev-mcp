@@ -1,0 +1,3 @@
+Source: https://raw.githubusercontent.com/typesafe-ai/skills/main/skills/typesafe-ai/
+Fetched: 2026-09-21T18:02:14+00:00
+Refresh with: uv run python scripts/update_skill.py

@@ -102,7 +102,7 @@ workflow:
 > running one. To design a new tool, iterate with `ask_jev` until the answers
 > are right, then `create_tool` with clear docs so future agents can reuse it.
 
-Eight MCP tools, all requiring a valid bearer token:
+Nine MCP tools, all requiring a valid bearer token:
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -114,6 +114,7 @@ Eight MCP tools, all requiring a valid bearer token:
 | `run_tool` | `name, inputs, model?` | `{tool: name, version, model, answers, usage, run_id}`. |
 | `delete_tool` | `name` | `{deleted: true, name}`. Runs are retained with the name for history. |
 | `tool_runs` | `name?, limit?` (default 20, max 200) | Recent runs newest first: `{run_id, tool_name, version, client_id, inputs, answers, model, usage, latency_ms, error, created_at}`. |
+| `get_guide` | none | `{uri, guide}`: TypeSafe's vendored agent skill plus a jev-mcp adapter section; also the MCP resource `jev://guide`. |
 
 Error contract: validation failures and not-found conditions are returned as
 MCP tool errors (`isError: true`) with a single plain-English message that

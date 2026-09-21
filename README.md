@@ -81,6 +81,13 @@ refresh issues a replacement with a new expiry, so an active agent can retain ac
 
 ## How agents use it
 
+Agents don't need to be taught TypeSafe up front. The server ships TypeSafe's official
+[agent skill](https://docs.typesafe.ai/agent-skill) through the `get_guide` tool (and the `jev://guide`
+resource), prefixed with a short section that maps the skill's concepts onto these tools. The startup
+instructions tell agents to read it before designing a new tool. If you use Claude Code, also install the
+skill locally with `claude plugin marketplace add typesafe-ai/skills && claude plugin install typesafe@typesafe-ai`;
+the server-shipped copy is for hosted agents that cannot install plugins.
+
 The server's `instructions` field tells connecting agents the workflow:
 
 1. Call `list_tools` first. If a saved tool fits, call `get_tool` to read its docs, then `run_tool` with
@@ -188,7 +195,7 @@ today" threshold — the agent drafts a reply now.
 
 ## Tool reference
 
-All eight tools require a valid bearer token.
+All nine tools require a valid bearer token.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
@@ -200,6 +207,7 @@ All eight tools require a valid bearer token.
 | `run_tool` | `name, inputs, model?` | `{tool: name, version, model, answers, usage, run_id}`. |
 | `delete_tool` | `name` | `{deleted: true, name}`. Runs are retained with the name for history. |
 | `tool_runs` | `name?, limit?` (default 20, max 200) | Recent TypeSafe calls newest first: `{run_id, tool_name, version, client_id, client_name, inputs, answers, model, usage, latency_ms, error, created_at}`. Omit `name` to include ad-hoc `ask_jev` calls (`tool_name = null`). Calls that failed at TypeSafe are recorded with `error`; calls rejected by validation before reaching TypeSafe are not recorded. |
+| `get_guide` | none | `{uri, guide}`: TypeSafe's official agent skill (MIT, vendored) plus a section mapping it onto these tools and the exact question shapes. Also served as the MCP resource `jev://guide`. |
 
 Validation failures and not-found conditions come back as MCP tool errors with a single plain-English
 message naming the offending field. TypeSafe HTTP errors are surfaced with the status code, the API's
@@ -307,6 +315,11 @@ TYPESAFE_API_KEY=... uv run python scripts/smoke_live.py
 ```
 
 Without a key it prints a skip message and exits 0.
+
+### Refreshing the vendored skill
+
+The guide's upstream half lives in `jev_mcp/vendor/typesafe-ai/` (MIT, TypeSafe AI). Refresh it with
+`uv run python scripts/update_skill.py`, review the diff, and commit; `SOURCE.txt` records the fetch time.
 
 ## License
 

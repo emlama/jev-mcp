@@ -38,3 +38,6 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"jev_mcp/guide.py" = ["E501"]  # markdown tables in the agent guide cannot wrap

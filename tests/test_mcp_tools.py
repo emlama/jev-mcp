@@ -1,11 +1,12 @@
 from tests.conftest import EMAIL_TOOL, McpClient, obtain_grant
 
 EXPECTED_TOOLS = {
-    "ask_jev", "create_tool", "update_tool", "get_tool", "list_tools", "run_tool", "delete_tool", "tool_runs"
+    "ask_jev", "create_tool", "update_tool", "get_tool", "list_tools",
+    "run_tool", "delete_tool", "tool_runs", "get_guide",
 }
 
 
-def test_lists_exactly_the_eight_tools(mcp):
+def test_lists_exactly_the_nine_tools(mcp):
     names = {tool["name"] for tool in mcp.list_tools()["tools"]}
     assert names == EXPECTED_TOOLS
     run_tool = next(t for t in mcp.list_tools()["tools"] if t["name"] == "run_tool")
