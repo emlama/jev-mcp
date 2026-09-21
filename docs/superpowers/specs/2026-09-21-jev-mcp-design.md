@@ -112,7 +112,7 @@ Eight MCP tools, all requiring a valid bearer token:
 | `get_tool` | `name` | Full definition including docs. |
 | `list_tools` | `query?` | `[{name, title, version, updated_at, summary}]` where summary is the first line of docs. `query` is a case-insensitive substring match over name, title, and docs. |
 | `run_tool` | `name, inputs, model?` | `{tool: name, version, model, answers, usage, run_id}`. |
-| `delete_tool` | `name` | `{deleted: true}`. Runs are retained with the name for history. |
+| `delete_tool` | `name` | `{deleted: true, name}`. Runs are retained with the name for history. |
 | `tool_runs` | `name?, limit?` (default 20, max 200) | Recent runs newest first: `{run_id, tool_name, version, client_id, inputs, answers, model, usage, latency_ms, error, created_at}`. |
 
 Error contract: validation failures and not-found conditions are returned as
@@ -316,7 +316,10 @@ network access.
 - README covers: what it is, five-minute Fly deploy (`fly launch`, `fly
   volumes create`, `fly secrets set`, `fly deploy`), generic Docker deploy,
   adding the connector in Claude Desktop and claude.ai, the agent workflow,
-  the tool reference, and how to back up the SQLite file.
+  the tool reference, and how to back up the SQLite file with `VACUUM INTO`
+  (a plain file copy is unsafe in WAL mode).
+- Single instance only. The database is one file on one volume, so running a
+  second machine would fork the data rather than share it.
 
 `GET /healthz` returns `{"ok": true}` without auth. It proves the database is
 *writable*, not merely reachable, by upserting the single row of a `healthcheck`

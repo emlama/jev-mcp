@@ -33,6 +33,9 @@ fly deploy
 curl https://<your-app>.fly.dev/healthz
 ```
 
+This is a single-instance design: the database is one SQLite file on one volume, so scaling past one
+Fly machine gives each machine its own volume and forks the database. Keep the count at one.
+
 ## Deploy with Docker
 
 ```bash
@@ -183,7 +186,7 @@ All eight tools require a valid bearer token.
 | `get_tool` | `name` | Full definition including docs. |
 | `list_tools` | `query?` | `[{name, title, version, updated_at, summary}]` where summary is the first line of docs. `query` is a case-insensitive substring match over name, title, and docs. |
 | `run_tool` | `name, inputs, model?` | `{tool: name, version, model, answers, usage, run_id}`. |
-| `delete_tool` | `name` | `{deleted: true}`. Runs are retained with the name for history. |
+| `delete_tool` | `name` | `{deleted: true, name}`. Runs are retained with the name for history. |
 | `tool_runs` | `name?, limit?` (default 20, max 200) | Recent runs newest first: `{run_id, tool_name, version, client_id, inputs, answers, model, usage, latency_ms, error, created_at}`. |
 
 Validation failures and not-found conditions come back as MCP tool errors with a single plain-English
@@ -222,25 +225,39 @@ HTTPS (set `JEV_ALLOW_INSECURE_URL=1` to allow `http://` for local development o
   TypeSafe call on their behalf.
 - Run only behind HTTPS in production; `JEV_PUBLIC_URL` doubles as the OAuth issuer, so it must be the
   exact externally reachable origin.
-- `jev_mcp/server.py` carries a small guarded patch for a bug in the pinned `mcp==2.2.0` SDK, where a
-  missing default on `RevocationRequest.client_secret` makes `/revoke` reject the public clients dynamic
-  registration creates. It checks the field at import time and only applies the fix if the bug is still
-  present, so it self-disables once upstream ships a corrected release.
+- `jev_mcp/server.py` carries a small guarded patch for a bug in the mcp SDK version this project was
+  built against (2.2.0, locked in `uv.lock`), where a missing default on `RevocationRequest.client_secret`
+  makes `/revoke` reject the public clients dynamic registration creates. It checks the field at import
+  time and only applies the fix if the bug is still present, so it self-disables once upstream ships a
+  corrected release. The patch rebinds an attribute on an SDK module, which is process-wide, and any
+  failure to find what it patches is swallowed so a moved module degrades to upstream behaviour.
+
+- The container runs as root. Fly.io and Docker mount volumes root-owned and the slim base image has no
+  `gosu` or `su-exec` to drop privileges after fixing ownership, so a non-root default would fail to
+  start on a freshly attached volume. Nothing but the app runs in the image and it listens on one port,
+  so the exposure is small — but if your host lets you prepare the volume, run non-root by adding
+  `user: "1000:1000"` to the `jev-mcp` service in `docker-compose.yml` and `chown -R 1000:1000` the
+  volume's `/data` once before starting.
 
 ## Backups
 
-The whole application state is one SQLite file. To back it up:
+The whole application state is one SQLite file. Copying `jev.db` on its own gives you a torn or stale
+snapshot, because the database runs in WAL mode and recent commits live in the `-wal` sidecar. Let SQLite
+write a consistent copy with `VACUUM INTO`, then fetch that:
 
 ```bash
 # Fly.io
-fly ssh sftp get /data/jev.db ./backup.db
+fly ssh console -C "python -c \"import sqlite3; sqlite3.connect('/data/jev.db').execute('VACUUM INTO \\\"/data/backup.db\\\"')\""
+fly ssh sftp get /data/backup.db ./jev-backup.db
 
 # Docker
-docker cp jev-mcp:/data/jev.db ./backup.db
+docker compose exec jev-mcp python -c "import sqlite3; sqlite3.connect('/data/jev.db').execute('VACUUM INTO \"/data/backup.db\"')"
+docker cp jev-mcp:/data/backup.db ./jev-backup.db
 ```
 
-To restore, stop the server, copy the backup file back to the same path (`/data/jev.db` by default), and
-start the server again.
+`VACUUM INTO` fails if the destination already exists, so delete the previous `/data/backup.db` between
+runs. To restore, stop the server, copy the backup to `/data/jev.db` (the configured `JEV_DB_PATH`),
+delete any leftover `jev.db-wal` and `jev.db-shm` files next to it, and start the server again.
 
 Run history is self-limiting: each new run deletes rows older than `JEV_RUN_RETENTION_DAYS` (90 by
 default), so back up before lowering it if you want to keep the older history.
