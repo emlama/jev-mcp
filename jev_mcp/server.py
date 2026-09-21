@@ -39,6 +39,14 @@ Workflow:
    (policies, definitions, examples that never change), the questions, and docs that explain purpose,
    when to use it, and how to read the answers.
 
+Question shapes (the `criteria` field differs per type):
+- noul:   {"type": "noul", "instructions": "Does `email.body` express urgency?",
+           "criteria": {"true": "explicitly time-sensitive", "false": "no urgency"}}   (criteria optional)
+- choice: {"type": "choice", "instructions": "Which team handles `email`?",
+           "criteria": {"billing": "payments and refunds", "support": null}}          (2-255 options)
+- score:  {"type": "score", "instructions": "How angry is `email.body`?",
+           "criteria": ["calm", "irritated", "angry"]}                                  (2-10 ordered levels)
+
 Question design: ask narrow, atomic questions; put reference material in context rather than in the
 question; refer to state fields with backticked paths such as `email.subject`. Answer types: noul
 returns P(yes) in 0..1; choice returns the top option, a probability per option, and confidence; score
@@ -159,9 +167,15 @@ def _register_tools(srv: MCPServer, service: ToolService, provider: SqliteOAuthP
     @srv.tool(
         description=(
             "Ask TypeSafe Jev one-off questions about a state without saving anything. Use this to "
-            "iterate on question wording before create_tool. `state` is a string, object, or array; "
-            "`questions` maps ids to {type: noul|choice|score, instructions, criteria}. Returns answers "
-            "keyed by question id."
+            "iterate on question wording before create_tool. `state` is a string, object, or array. "
+            "`questions` maps ids to one of three shapes: "
+            '{"type": "noul", "instructions": "yes/no question", '
+            '"criteria": {"true": "...", "false": "..."}} (criteria optional); '
+            '{"type": "choice", "instructions": "...", '
+            '"criteria": {"option_a": "description", "option_b": null}} '
+            "(2 to 255 options, keys are the option names); "
+            '{"type": "score", "instructions": "...", "criteria": ["lowest level", "...", "highest level"]} '
+            "(2 to 10 ordered levels). Returns answers keyed by question id and a run_id."
         )
     )
     async def ask_jev(
@@ -176,9 +190,10 @@ def _register_tools(srv: MCPServer, service: ToolService, provider: SqliteOAuthP
             "Save a reusable jev tool. `name` is a slug (^[a-z][a-z0-9_]{2,63}$). `inputs` maps input "
             "name to {type: string|object|array, description, required?}; callers supply these at run "
             "time and they become top-level state fields. `context` holds constant state (policies, "
-            "definitions, examples). `questions` is the TypeSafe question map; refer to state with "
-            "backticked paths like `email.subject`. `docs` must explain purpose, when to use it, and "
-            "how to interpret answers (thresholds), for future agents."
+            "definitions, examples). `questions` uses the same three shapes as ask_jev (noul criteria "
+            '{"true","false"}; choice criteria {option: description|null}; score criteria [ordered levels]); '
+            "refer to state with backticked paths like `email.subject`. `docs` must explain purpose, when "
+            "to use it, and how to interpret answers (thresholds), for future agents."
         )
     )
     async def create_tool(
@@ -262,14 +277,17 @@ def _register_tools(srv: MCPServer, service: ToolService, provider: SqliteOAuthP
 
     @srv.tool(
         description=(
-            "Recent runs, newest first, including ad-hoc ask_jev calls (tool_name null). Optional "
-            "`name` filters to one tool; `limit` defaults to 20 (max 200). Shows inputs, answers, "
-            "usage, latency, errors, and which agent made the call."
+            "Recent TypeSafe calls, newest first. Omit `name` (or pass an empty string) to see every "
+            "call, including ad-hoc ask_jev calls, which have tool_name null; pass `name` to see only "
+            "one saved tool's runs. `limit` defaults to 20 (max 200). Each row has inputs, answers, "
+            "model, token usage, latency, and the calling agent. Calls that reached TypeSafe and "
+            "failed are recorded with `error`; calls rejected before that (missing inputs, unknown tool, "
+            "invalid questions) never reach TypeSafe and are not recorded."
         )
     )
     async def tool_runs(name: str | None = None, limit: int = 20) -> dict[str, Any]:
         runs = []
-        for run in service.recent_runs(name, limit):
+        for run in service.recent_runs(name or None, limit):
             view = run.model_dump(mode="json")
             view["client_name"] = provider.client_name(run.client_id)
             runs.append(view)

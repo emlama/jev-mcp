@@ -180,14 +180,14 @@ All eight tools require a valid bearer token.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `ask_jev` | `state` (string \| object \| array), `questions`, `model?` | `{model, answers, usage}` straight from TypeSafe. Not persisted, except a run row with `tool_name = null` for accounting. |
+| `ask_jev` | `state` (string \| object \| array), `questions`, `model?` | `{model, answers, usage, run_id}` straight from TypeSafe. Nothing is saved except a run row with `tool_name = null`. Question shapes: noul `criteria: {"true": …, "false": …}` (optional); choice `criteria: {option: description \| null}` (2–255 options); score `criteria: [ordered levels]` (2–10). |
 | `create_tool` | `name, title, docs, inputs, questions, context?, model?` | The saved tool. Error if name exists or validation fails. |
 | `update_tool` | `name` plus any subset of `title, docs, inputs, questions, context, model` | The saved tool with bumped version. Full validation runs on the merged result. |
 | `get_tool` | `name` | Full definition including docs. |
 | `list_tools` | `query?` | `[{name, title, version, updated_at, summary}]` where summary is the first line of docs. `query` is a case-insensitive substring match over name, title, and docs. |
 | `run_tool` | `name, inputs, model?` | `{tool: name, version, model, answers, usage, run_id}`. |
 | `delete_tool` | `name` | `{deleted: true, name}`. Runs are retained with the name for history. |
-| `tool_runs` | `name?, limit?` (default 20, max 200) | Recent runs newest first: `{run_id, tool_name, version, client_id, inputs, answers, model, usage, latency_ms, error, created_at}`. |
+| `tool_runs` | `name?, limit?` (default 20, max 200) | Recent TypeSafe calls newest first: `{run_id, tool_name, version, client_id, client_name, inputs, answers, model, usage, latency_ms, error, created_at}`. Omit `name` to include ad-hoc `ask_jev` calls (`tool_name = null`). Calls that failed at TypeSafe are recorded with `error`; calls rejected by validation before reaching TypeSafe are not recorded. |
 
 Validation failures and not-found conditions come back as MCP tool errors with a single plain-English
 message naming the offending field. TypeSafe HTTP errors are surfaced with the status code, the API's

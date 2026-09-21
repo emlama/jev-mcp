@@ -108,3 +108,30 @@ def test_typesafe_failure_is_reported_and_logged(settings, db):
         assert "HTTP 429" in text and "3 seconds" in text
         runs = mcp.call_ok("tool_runs", {})["runs"]
         assert runs[0]["error"] and "429" in runs[0]["error"]
+
+
+def test_tool_runs_empty_name_means_unfiltered(mcp):
+    mcp.call_ok(
+        "ask_jev",
+        {
+            "state": {"text": "hello"},
+            "questions": {"q": {"type": "noul", "instructions": "Is `text` polite?"}},
+        },
+    )
+    mcp.call_ok("create_tool", EMAIL_TOOL)
+    mcp.call_ok("run_tool", {"name": "email_triage", "inputs": {"email": {}}})
+
+    everything = mcp.call_ok("tool_runs", {"name": ""})["runs"]
+    assert [r["tool_name"] for r in everything] == ["email_triage", None]
+    assert everything == mcp.call_ok("tool_runs", {})["runs"]
+
+    only_tool = mcp.call_ok("tool_runs", {"name": "email_triage"})["runs"]
+    assert [r["tool_name"] for r in only_tool] == ["email_triage"]
+
+
+def test_descriptions_document_criteria_shapes(mcp):
+    tools = {t["name"]: t["description"] for t in mcp.list_tools()["tools"]}
+    for shape in ('"true"', '"false"', "option", "ordered levels"):
+        assert shape in tools["ask_jev"], shape
+    assert "same three shapes as ask_jev" in tools["create_tool"]
+    assert "not recorded" in tools["tool_runs"]
