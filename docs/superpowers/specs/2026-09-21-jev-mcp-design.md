@@ -155,9 +155,19 @@ Policies:
 - Pending consents expire after 10 minutes.
 - Resource indicator validation is on: tokens are bound to the configured
   public URL.
-- The owner password is compared with a constant-time function. After 5
-  failed attempts a pending consent is deleted and the agent must restart
-  the connection (pending consents already expire after 10 minutes).
+- The owner password must be at least 12 characters (`Settings.from_env`
+  refuses to start otherwise) and is compared with a constant-time function.
+- Two limits guard it. Per pending consent: after 5 failed attempts the
+  pending row is deleted and the agent must restart the connection (pending
+  consents already expire after 10 minutes). Globally: failures are also
+  counted in a single-row `oauth_lockout` table, and after 10 failures the
+  consent page refuses every submission — right password included — with
+  HTTP 429 until a deadline that backs off exponentially (60 s doubling per
+  further failure, capped at 1 hour). A successful consent resets both the
+  counter and the deadline. The global counter is what makes the password
+  un-brute-forceable: anyone can mint unlimited pending consents through
+  `/register` and `/authorize`, so a per-request counter alone bounds
+  nothing.
 - The `client_id` on the access token is the agent identity recorded on tools
   and runs. The client's registered `client_name` is stored so `tool_runs`
   and `get_tool` can show a readable agent name.

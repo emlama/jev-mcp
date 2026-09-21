@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from jev_mcp.db import Database, utc_now
+from jev_mcp.db import MIGRATIONS, Database, utc_now
 
 EXPECTED_TABLES = {
     "schema_version",
@@ -12,6 +12,8 @@ EXPECTED_TABLES = {
     "oauth_pending",
     "oauth_codes",
     "oauth_tokens",
+    "oauth_lockout",
+    "healthcheck",
 }
 
 
@@ -22,8 +24,34 @@ def test_migrate_creates_tables_and_is_idempotent(tmp_path):
     with db.tx() as conn:
         names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         version = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"]
+        lockout = conn.execute("SELECT failures, locked_until FROM oauth_lockout WHERE id = 1").fetchone()
     assert EXPECTED_TABLES <= names
-    assert version == 1
+    assert version == 2
+    assert (lockout["failures"], lockout["locked_until"]) == (0, 0)
+    db.close()
+
+
+def test_migrate_upgrades_a_version_1_database(tmp_path):
+    """An existing v1 database gains the v2 tables without losing its rows."""
+    db = Database(str(tmp_path / "jev.db"))
+    with db.tx() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)")
+        for statement in MIGRATIONS[1]:
+            conn.execute(statement)
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+        conn.execute("INSERT INTO oauth_clients VALUES ('c1', 'name', '{}', 't')")
+
+    db.migrate()
+
+    with db.tx() as conn:
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        version = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"]
+        lockout = conn.execute("SELECT failures, locked_until FROM oauth_lockout WHERE id = 1").fetchone()
+        clients = conn.execute("SELECT COUNT(*) AS n FROM oauth_clients").fetchone()["n"]
+    assert {"oauth_lockout", "healthcheck"} <= names
+    assert version == 2
+    assert (lockout["failures"], lockout["locked_until"]) == (0, 0)
+    assert clients == 1
     db.close()
 
 

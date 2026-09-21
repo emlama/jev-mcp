@@ -44,7 +44,7 @@ def test_wrong_pkce_verifier_rejected(http, settings):
     )
     request_id = authorize.headers["location"].split("request=", 1)[1]
     approved = http.post(
-        "/consent", data={"request": request_id, "password": "hunter2"}, follow_redirects=False
+        "/consent", data={"request": request_id, "password": "correct-horse-battery"}, follow_redirects=False
     )
     code = approved.headers["location"].split("code=", 1)[1].split("&", 1)[0]
     token = http.post(

@@ -4,7 +4,7 @@ from jev_mcp.config import ConfigError, Settings
 
 REQUIRED = {
     "TYPESAFE_API_KEY": "ts_key",
-    "JEV_OWNER_PASSWORD": "hunter2",
+    "JEV_OWNER_PASSWORD": "correct-horse-battery",
     "JEV_PUBLIC_URL": "https://jev.example.com/",
 }
 
@@ -12,7 +12,7 @@ REQUIRED = {
 def test_from_env_reads_required_and_defaults():
     s = Settings.from_env(REQUIRED)
     assert s.typesafe_api_key == "ts_key"
-    assert s.owner_password == "hunter2"
+    assert s.owner_password == "correct-horse-battery"
     assert s.public_url == "https://jev.example.com"  # trailing slash stripped
     assert s.mcp_url == "https://jev.example.com/mcp"
     assert s.db_path == "/data/jev.db"
@@ -55,3 +55,16 @@ def test_http_public_url_rejected_unless_escape_hatch():
 def test_non_integer_port_is_config_error():
     with pytest.raises(ConfigError):
         Settings.from_env({**REQUIRED, "JEV_PORT": "eighty"})
+
+
+def test_short_owner_password_rejected():
+    with pytest.raises(ConfigError) as exc:
+        Settings.from_env({**REQUIRED, "JEV_OWNER_PASSWORD": "12345678901"})  # 11 characters
+    message = str(exc.value)
+    assert "JEV_OWNER_PASSWORD" in message
+    assert "openssl rand -base64 24" in message
+
+
+def test_twelve_character_owner_password_accepted():
+    s = Settings.from_env({**REQUIRED, "JEV_OWNER_PASSWORD": "123456789012"})
+    assert s.owner_password == "123456789012"

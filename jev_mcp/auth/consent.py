@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 from collections.abc import Awaitable, Callable
 from html import escape
 from urllib.parse import urlparse
@@ -10,6 +11,7 @@ from urllib.parse import urlparse
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
+from jev_mcp.auth import provider as provider_module
 from jev_mcp.auth.provider import MAX_ATTEMPTS, PendingAuth, SqliteOAuthProvider
 from jev_mcp.config import Settings
 
@@ -30,6 +32,17 @@ def _html(title: str, body: str, status: int = 200) -> HTMLResponse:
         f"<title>{escape(title)}</title><style>{_STYLE}</style></head><body><main>{body}</main></body></html>"
     )
     return HTMLResponse(page, status_code=status)
+
+
+def _locked(seconds_left: int) -> HTMLResponse:
+    minutes = max(1, math.ceil(seconds_left / 60))
+    plural = "s" if minutes != 1 else ""
+    return _html(
+        "Too many failed attempts",
+        "<h1>Too many failed attempts</h1>"
+        f"<p>Try again in {minutes} minute{plural}.</p>",
+        status=429,
+    )
 
 
 def _expired() -> HTMLResponse:
@@ -73,6 +86,12 @@ def consent_handler(
         form = await request.form()
         request_id = str(form.get("request", ""))
         password = str(form.get("password", ""))
+        # The global lock is checked before the password so that minting new pending
+        # requests cannot buy more guesses; it holds even for the right password.
+        locked_until = provider.consent_locked_until()
+        seconds_left = locked_until - provider_module.now_s()
+        if seconds_left > 0:
+            return _locked(seconds_left)
         pending = provider.get_pending(request_id)
         if pending is None:
             return _expired()
@@ -80,6 +99,7 @@ def consent_handler(
         pwd_setting_bytes = settings.owner_password.encode("utf-8")
         if not hmac.compare_digest(pwd_bytes, pwd_setting_bytes):
             attempts = provider.record_failed_attempt(request_id)
+            provider.record_global_failure()
             if attempts >= MAX_ATTEMPTS:
                 locked_msg = (
                     "<h1>Too many failed attempts</h1>"
@@ -94,6 +114,7 @@ def consent_handler(
             redirect_url = provider.approve(request_id)
         except LookupError:
             return _expired()
+        provider.reset_global_failures()
         return RedirectResponse(redirect_url, status_code=302)
 
     return handle

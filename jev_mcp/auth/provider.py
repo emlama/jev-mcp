@@ -30,6 +30,12 @@ CODE_TTL = 600
 MAX_ATTEMPTS = 5
 SCOPE = "jev"
 
+# Anyone can mint pending consents through /register + /authorize, so the per-request
+# attempt counter alone would not slow a brute force down. These bound the whole server.
+LOCKOUT_THRESHOLD = 10
+LOCKOUT_BASE_SECONDS = 60
+LOCKOUT_MAX_SECONDS = 3600
+
 
 def now_s() -> int:  # indirection so tests can freeze time
     return tk.now_s()
@@ -116,6 +122,33 @@ class SqliteOAuthProvider:
             if attempts >= MAX_ATTEMPTS:
                 conn.execute("DELETE FROM oauth_pending WHERE id = ?", (request_id,))
         return attempts
+
+    def consent_locked_until(self) -> int:
+        """Unix time the global consent lockout lifts; 0 when the page is open."""
+        with self._db.tx() as conn:
+            row = conn.execute("SELECT locked_until FROM oauth_lockout WHERE id = 1").fetchone()
+        return row["locked_until"] if row else 0
+
+    def record_global_failure(self) -> int:
+        """Count one wrong owner password server-wide; return the new lockout deadline (0 if none)."""
+        with self._db.tx() as conn:
+            conn.execute("UPDATE oauth_lockout SET failures = failures + 1 WHERE id = 1")
+            row = conn.execute("SELECT failures FROM oauth_lockout WHERE id = 1").fetchone()
+            failures = row["failures"] if row else 0
+            if failures < LOCKOUT_THRESHOLD:
+                return 0
+            # Exponential backoff past the threshold, capped. The exponent is clamped
+            # first only to keep the intermediate integer small; the cap decides.
+            exponent = min(failures - LOCKOUT_THRESHOLD, 16)
+            delay = min(LOCKOUT_MAX_SECONDS, LOCKOUT_BASE_SECONDS * 2**exponent)
+            locked_until = now_s() + delay
+            conn.execute("UPDATE oauth_lockout SET locked_until = ? WHERE id = 1", (locked_until,))
+        return locked_until
+
+    def reset_global_failures(self) -> None:
+        """Clear the global counter and lock after a successful consent."""
+        with self._db.tx() as conn:
+            conn.execute("UPDATE oauth_lockout SET failures = 0, locked_until = 0 WHERE id = 1")
 
     def approve(self, request_id: str) -> str:
         code = tk.new_token(32)

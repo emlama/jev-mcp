@@ -4,7 +4,13 @@ from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
 from jev_mcp.auth import provider as provider_module
-from jev_mcp.auth.provider import MAX_ATTEMPTS, SqliteOAuthProvider
+from jev_mcp.auth.provider import (
+    LOCKOUT_BASE_SECONDS,
+    LOCKOUT_MAX_SECONDS,
+    LOCKOUT_THRESHOLD,
+    MAX_ATTEMPTS,
+    SqliteOAuthProvider,
+)
 from jev_mcp.config import Settings
 from jev_mcp.db import Database
 
@@ -191,6 +197,35 @@ async def test_expiry_is_enforced(provider, monkeypatch):
 
     monkeypatch.setattr(provider_module, "now_s", lambda: real_now + 100_000)
     assert await provider.load_refresh_token(client, token.refresh_token) is None
+
+
+async def test_global_failures_lock_consent_after_threshold(provider, monkeypatch):
+    """Failures are counted globally, not per pending request."""
+    monkeypatch.setattr(provider_module, "now_s", lambda: 1_000_000)
+    assert provider.consent_locked_until() == 0
+    for _ in range(LOCKOUT_THRESHOLD - 1):
+        assert provider.record_global_failure() == 0
+    assert provider.consent_locked_until() == 0
+
+    locked_until = provider.record_global_failure()
+    assert locked_until == 1_000_000 + LOCKOUT_BASE_SECONDS
+    assert provider.consent_locked_until() == locked_until
+
+    # the backoff doubles with each further failure and is capped
+    assert provider.record_global_failure() == 1_000_000 + 2 * LOCKOUT_BASE_SECONDS
+    for _ in range(20):
+        provider.record_global_failure()
+    assert provider.consent_locked_until() == 1_000_000 + LOCKOUT_MAX_SECONDS
+
+
+async def test_reset_global_failures_clears_lockout(provider):
+    for _ in range(LOCKOUT_THRESHOLD):
+        provider.record_global_failure()
+    assert provider.consent_locked_until() > 0
+    provider.reset_global_failures()
+    assert provider.consent_locked_until() == 0
+    # the counter restarted: the next failure is not enough to lock again
+    assert provider.record_global_failure() == 0
 
 
 async def test_approve_is_atomic_rejects_deleted_pending(provider):

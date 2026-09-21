@@ -47,7 +47,7 @@ class Grant:
 def settings(tmp_path) -> Settings:
     return Settings(
         typesafe_api_key="test-key",
-        owner_password="hunter2",
+        owner_password="correct-horse-battery",
         public_url=PUBLIC,
         db_path=str(tmp_path / "jev.db"),
     )

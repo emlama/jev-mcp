@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -74,12 +74,40 @@ MIGRATIONS: dict[int, list[str]] = {
         )""",
         "CREATE INDEX IF NOT EXISTS oauth_tokens_family ON oauth_tokens(family_id)",
     ],
+    2: [
+        # Single-row table: consent failures are counted for the whole server, not per
+        # pending request, so minting fresh pending requests cannot reset the counter.
+        """CREATE TABLE IF NOT EXISTS oauth_lockout (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            failures INTEGER NOT NULL DEFAULT 0,
+            locked_until INTEGER NOT NULL DEFAULT 0
+        )""",
+        "INSERT OR IGNORE INTO oauth_lockout (id) VALUES (1)",
+        # Written by /healthz so the check proves the database is writable, not just readable.
+        """CREATE TABLE IF NOT EXISTS healthcheck (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            touched_at INTEGER NOT NULL
+        )""",
+    ],
 }
 
 
 def utc_now() -> str:
     """Current time as ISO 8601 UTC with second precision and a Z suffix."""
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return _iso(datetime.now(UTC))
+
+
+def utc_cutoff(age: timedelta) -> str:
+    """A timestamp `age` in the past, in exactly the format utc_now() writes.
+
+    Stored timestamps are ISO strings, so callers compare against this
+    lexicographically; sharing the formatter keeps that comparison sound.
+    """
+    return _iso(datetime.now(UTC) - age)
+
+
+def _iso(moment: datetime) -> str:
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class Database:

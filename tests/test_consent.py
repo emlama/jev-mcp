@@ -8,8 +8,9 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from jev_mcp.auth import provider as provider_module
 from jev_mcp.auth.consent import consent_handler
-from jev_mcp.auth.provider import MAX_ATTEMPTS, SqliteOAuthProvider
+from jev_mcp.auth.provider import LOCKOUT_THRESHOLD, MAX_ATTEMPTS, SqliteOAuthProvider
 from jev_mcp.config import Settings
 from jev_mcp.db import Database
 
@@ -21,7 +22,7 @@ CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 def settings(tmp_path):
     return Settings(
         typesafe_api_key="k",
-        owner_password="hunter2",
+        owner_password="correct-horse-battery",
         public_url=PUBLIC,
         db_path=str(tmp_path / "jev.db"),
     )
@@ -92,7 +93,7 @@ async def test_correct_password_redirects_with_code_and_state(client, provider):
     request_id = await pending_request(provider)
     response = client.post(
         "/consent",
-        data={"request": request_id, "password": "hunter2"},
+        data={"request": request_id, "password": "correct-horse-battery"},
         follow_redirects=False,
     )
     assert response.status_code == 302
@@ -125,19 +126,61 @@ def test_html_escapes_client_name(client, provider, settings):
     assert "&lt;script&gt;" in response.text
 
 
+async def test_global_lockout_spans_separate_pending_requests(client, provider):
+    """Ten wrong passwords across ten different pending requests lock the consent page."""
+    for _ in range(LOCKOUT_THRESHOLD):
+        request_id = await pending_request(provider)
+        response = client.post("/consent", data={"request": request_id, "password": "wrong"})
+        assert response.status_code == 401, response.text
+
+    fresh = await pending_request(provider)
+    blocked = client.post("/consent", data={"request": fresh, "password": "wrong"})
+    assert blocked.status_code == 429
+    assert "Too many failed attempts" in blocked.text
+    assert "Try again in 1 minute" in blocked.text
+
+    # even the correct password is refused while the lockout is in force
+    correct = client.post(
+        "/consent",
+        data={"request": fresh, "password": "correct-horse-battery"},
+        follow_redirects=False,
+    )
+    assert correct.status_code == 429
+
+
+async def test_lockout_expiry_lets_the_owner_back_in(client, provider, monkeypatch):
+    for _ in range(LOCKOUT_THRESHOLD):
+        request_id = await pending_request(provider)
+        client.post("/consent", data={"request": request_id, "password": "wrong"})
+    locked_until = provider.consent_locked_until()
+    assert locked_until > 0
+
+    fresh = await pending_request(provider)
+    monkeypatch.setattr(provider_module, "now_s", lambda: locked_until + 1)
+    response = client.post(
+        "/consent",
+        data={"request": fresh, "password": "correct-horse-battery"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    # a successful consent clears the counter as well as the lock
+    assert provider.consent_locked_until() == 0
+    assert provider.record_global_failure() == 0
+
+
 async def test_double_approval_returns_expired(client, provider):
     request_id = await pending_request(provider)
     # First approval succeeds
     response1 = client.post(
         "/consent",
-        data={"request": request_id, "password": "hunter2"},
+        data={"request": request_id, "password": "correct-horse-battery"},
         follow_redirects=False,
     )
     assert response1.status_code == 302
     # Second submission of the same form should get 400 expired
     response2 = client.post(
         "/consent",
-        data={"request": request_id, "password": "hunter2"},
+        data={"request": request_id, "password": "correct-horse-battery"},
         follow_redirects=False,
     )
     assert response2.status_code == 400

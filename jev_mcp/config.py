@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 REQUIRED_VARS = ("TYPESAFE_API_KEY", "JEV_OWNER_PASSWORD", "JEV_PUBLIC_URL")
+MIN_PASSWORD_LENGTH = 12
 
 
 class ConfigError(RuntimeError):
@@ -37,6 +38,14 @@ class Settings:
         if missing:
             raise ConfigError(f"Missing required environment variables: {', '.join(missing)}")
 
+        owner_password = env["JEV_OWNER_PASSWORD"].strip()
+        if len(owner_password) < MIN_PASSWORD_LENGTH:
+            raise ConfigError(
+                f"JEV_OWNER_PASSWORD must be at least {MIN_PASSWORD_LENGTH} characters; "
+                "it is the only gate on authorizing an agent. "
+                "Generate one with: openssl rand -base64 24"
+            )
+
         public_url = env["JEV_PUBLIC_URL"].strip().rstrip("/")
         if not public_url.startswith("https://") and env.get("JEV_ALLOW_INSECURE_URL", "") != "1":
             raise ConfigError(
@@ -46,7 +55,7 @@ class Settings:
 
         return cls(
             typesafe_api_key=env["TYPESAFE_API_KEY"].strip(),
-            owner_password=env["JEV_OWNER_PASSWORD"].strip(),
+            owner_password=owner_password,
             public_url=public_url,
             db_path=env.get("JEV_DB_PATH", "/data/jev.db").strip() or "/data/jev.db",
             host=env.get("JEV_HOST", "0.0.0.0").strip() or "0.0.0.0",
