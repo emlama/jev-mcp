@@ -4,7 +4,7 @@ import httpx2
 import pytest
 from typesafe_sdk import RetryPolicy
 
-from jev_mcp.typesafe_client import JevError, TypeSafeJevClient
+from jev_mcp.typesafe_client import JevError, TypeSafeJevClient, _strip_prefix
 
 SUCCESS_BODY = {
     "model": "jev-1.13.0",
@@ -89,3 +89,14 @@ async def test_server_error_maps_to_jev_error():
 def test_agent_message_without_status():
     err = JevError("connection refused")
     assert err.agent_message() == "TypeSafe request failed: connection refused"
+
+
+def test_strip_prefix_removes_endpoint_prefix():
+    assert (
+        _strip_prefix("POST https://api.typesafe.ai/v1/systemone: 429 slow down")
+        == "429 slow down"
+    )
+
+
+def test_strip_prefix_leaves_other_colons_untouched():
+    assert _strip_prefix("429 Model not found: jev-x") == "429 Model not found: jev-x"

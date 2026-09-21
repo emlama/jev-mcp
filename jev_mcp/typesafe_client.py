@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol
 
 import httpx2
@@ -13,6 +14,8 @@ from typesafe_sdk import (
     TypeSafeError,
     TypeSafeRateLimitError,
 )
+
+_ENDPOINT_PREFIX = re.compile(r"^(?:GET|POST|PUT|PATCH|DELETE) \S+: ")
 
 
 class JevResult(BaseModel):
@@ -76,7 +79,5 @@ class TypeSafeJevClient:
 
 
 def _strip_prefix(message: str) -> str:
-    """The SDK formats errors as 'POST <url>: <status> <message>'; keep the human part."""
-    if ": " in message:
-        message = message.split(": ", 1)[1]
-    return message
+    """The SDK formats API errors as 'POST <url>: <status> <message>'; keep the human part."""
+    return _ENDPOINT_PREFIX.sub("", message, count=1)
