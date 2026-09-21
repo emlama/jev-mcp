@@ -63,9 +63,21 @@ claude mcp add --transport http jev https://<host>/mcp
 Then run `/mcp` inside Claude Code to complete authentication.
 
 Every agent that connects gets its own client id and its own access/refresh tokens. To revoke one agent,
-delete its rows from the `oauth_tokens` table in the SQLite database; to revoke every agent at once,
-rotate `JEV_OWNER_PASSWORD` and restart (new consent approvals will require the new password, but existing
-tokens keep working until they expire or are deleted — deleting rows is the immediate option).
+stop the server and delete its rows (matching `client_id`) from `oauth_tokens`, `oauth_codes`, and
+`oauth_pending` in the SQLite database, then restart. To revoke every agent at once, stop the server,
+run the following against the configured database, and restart:
+
+```sql
+BEGIN IMMEDIATE;
+DELETE FROM oauth_tokens;
+DELETE FROM oauth_codes;
+DELETE FROM oauth_pending;
+COMMIT;
+```
+
+Rotate `JEV_OWNER_PASSWORD` before restarting if it may have been shared or compromised. Password
+rotation alone does **not** revoke existing grants: refresh tokens continue to work and each successful
+refresh issues a replacement with a new expiry, so an active agent can retain access indefinitely.
 
 ## How agents use it
 
@@ -221,6 +233,9 @@ root), an unknown log level, a non-positive port or token TTL, or a negative ret
 - Self-contained OAuth 2.1 authorization server with PKCE and dynamic client registration; no external
   identity provider is required.
 - Access and refresh tokens are hashed at rest in SQLite — the raw token is never stored.
+- Client registrations are capped at 1,000. Registration, authorization, and token exchange clean up
+  clients older than 24 hours that have no live tokens, pending consent, or unused authorization code.
+  At capacity, new registrations are rejected until space is freed; existing grants remain usable.
 - One owner password gates every agent's consent; anyone who knows it can authorize a new agent, so treat
   it like any other server credential. It must be at least 12 characters, and guessing is bounded twice
   over: 5 attempts per consent request, and 10 failures server-wide lock the consent page for everyone

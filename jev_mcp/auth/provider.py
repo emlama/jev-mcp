@@ -44,6 +44,7 @@ LOCKOUT_MAX_SECONDS = 3600
 
 # Registration is open to anyone, so client rows are bounded in size and lifetime.
 MAX_CLIENT_METADATA_BYTES = 8192
+MAX_REGISTERED_CLIENTS = 1000
 CLIENT_RETENTION = timedelta(hours=24)
 
 
@@ -83,11 +84,24 @@ class SqliteOAuthProvider:
                 MAX_CLIENT_METADATA_BYTES,
             )
             raise RegistrationError("invalid_client_metadata", "client metadata too large")
+        full = False
         with self._db.tx() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO oauth_clients (client_id, client_name, client_info_json, created_at) "
-                "VALUES (?,?,?,?)",
-                (client_info.client_id, client_info.client_name, payload, utc_now()),
+            self._purge(conn)
+            count = conn.execute(
+                "SELECT COUNT(*) FROM oauth_clients WHERE client_id != ?", (client_info.client_id,)
+            ).fetchone()[0]
+            full = count >= MAX_REGISTERED_CLIENTS
+            if not full:
+                conn.execute(
+                    "INSERT OR REPLACE INTO oauth_clients "
+                    "(client_id, client_name, client_info_json, created_at) "
+                    "VALUES (?,?,?,?)",
+                    (client_info.client_id, client_info.client_name, payload, utc_now()),
+                )
+        # SDK errors are frozen dataclasses: raise outside the generator-based tx().
+        if full:
+            raise RegistrationError(
+                "invalid_client_metadata", "client registration capacity reached; try later"
             )
         log.info("registered client %s (%s)", client_info.client_id, client_info.client_name or "unnamed")
 
@@ -419,9 +433,9 @@ class SqliteOAuthProvider:
     def _purge(conn: sqlite3.Connection) -> None:
         """Drop expired state and abandoned registrations.
 
-        Callers must have already recorded whatever keeps the current client alive
-        (its pending row or its freshly issued tokens) in this same transaction,
-        because a client with neither is exactly what the last statement deletes.
+        Existing clients need a pending request, an unused code, or live tokens
+        to survive beyond the registration retention window. Authorization and
+        exchange callers must record that state before purging.
         """
         now = now_s()
         conn.execute("DELETE FROM oauth_pending WHERE expires_at <= ?", (now,))
@@ -430,6 +444,7 @@ class SqliteOAuthProvider:
         conn.execute(
             "DELETE FROM oauth_clients WHERE created_at < ? "
             "AND client_id NOT IN (SELECT client_id FROM oauth_tokens WHERE revoked = 0) "
-            "AND client_id NOT IN (SELECT client_id FROM oauth_pending)",
+            "AND client_id NOT IN (SELECT client_id FROM oauth_pending) "
+            "AND client_id NOT IN (SELECT client_id FROM oauth_codes WHERE used = 0)",
             (utc_cutoff(CLIENT_RETENTION),),
         )

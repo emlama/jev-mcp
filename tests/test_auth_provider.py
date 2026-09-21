@@ -260,16 +260,60 @@ async def test_stale_clients_without_tokens_are_purged(provider):
     live, stale = make_client("live-client"), make_client("stale-client")
     await provider.register_client(live)
     await provider.register_client(stale)
-    with provider._db.tx() as conn:  # both registered more than 24 hours ago
-        conn.execute("UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z'")
     fresh = make_client("fresh-client")
     await provider.register_client(fresh)
+    with provider._db.tx() as conn:  # only live and stale registered more than 24 hours ago
+        conn.execute(
+            "UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z' WHERE client_id != ?",
+            (fresh.client_id,),
+        )
 
     await issue(provider, live)  # the code exchange purges
 
     assert await provider.get_client("live-client") is not None  # holds live tokens
     assert await provider.get_client("fresh-client") is not None  # registered just now
     assert await provider.get_client("stale-client") is None
+
+
+async def test_registration_purges_abandoned_clients_before_capacity_check(provider, monkeypatch):
+    monkeypatch.setattr(provider_module, "MAX_REGISTERED_CLIENTS", 1)
+    await provider.register_client(make_client("abandoned"))
+    with provider._db.tx() as conn:
+        conn.execute("UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z'")
+    await provider.register_client(make_client("replacement"))
+    assert await provider.get_client("abandoned") is None
+    assert await provider.get_client("replacement") is not None
+
+
+async def test_reregistering_same_client_does_not_consume_capacity(provider, monkeypatch):
+    monkeypatch.setattr(provider_module, "MAX_REGISTERED_CLIENTS", 1)
+    client = make_client()
+    await provider.register_client(client)
+    await provider.register_client(client.model_copy(update={"client_name": "Updated name"}))
+    assert provider.client_name(client.client_id) == "Updated name"
+    with pytest.raises(RegistrationError, match="capacity"):
+        await provider.register_client(make_client("overflow"))
+
+
+@pytest.mark.parametrize("code_state", ["unused", "used", "expired"])
+async def test_registration_preserves_only_redeemable_codes(provider, code_state):
+    client = make_client()
+    await provider.register_client(client)
+    request_id = request_id_from(await provider.authorize(client, make_params()))
+    code = provider.approve(request_id).split("code=", 1)[1].split("&", 1)[0]
+    with provider._db.tx() as conn:
+        conn.execute("UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z'")
+        if code_state == "used":
+            conn.execute("UPDATE oauth_codes SET used = 1")
+        elif code_state == "expired":
+            conn.execute("UPDATE oauth_codes SET expires_at = 0")
+    await provider.register_client(make_client("new-client"))
+    retained = await provider.get_client(client.client_id)
+    assert (retained is not None) == (code_state == "unused")
+    if retained is not None:
+        auth_code = await provider.load_authorization_code(client, code)
+        token = await provider.exchange_authorization_code(client, auth_code)
+        assert await provider.load_access_token(token.access_token) is not None
 
 
 async def test_global_failures_lock_consent_after_threshold(provider, monkeypatch):

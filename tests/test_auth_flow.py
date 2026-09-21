@@ -1,6 +1,61 @@
 from tests.conftest import CALLBACK, McpClient, obtain_grant, pkce_pair, register
 
 
+def test_registration_capacity_rejects_new_clients_without_revoking_grants(http, settings, monkeypatch):
+    from jev_mcp.auth import provider as provider_module
+
+    monkeypatch.setattr(provider_module, "MAX_REGISTERED_CLIENTS", 2)
+    grant = obtain_grant(http, settings)
+    register(http, "second-client")
+    rejected = http.post(
+        "/register",
+        json={"client_name": "overflow", "redirect_uris": [CALLBACK]},
+    )
+    assert rejected.status_code == 400
+    assert "capacity" in rejected.json()["error_description"]
+    assert McpClient(http, grant.access_token).list_tools()["tools"]
+    refreshed = http.post(
+        "/token",
+        data={
+            "grant_type": "refresh_token", "refresh_token": grant.refresh_token,
+            "client_id": grant.client_id,
+        },
+    )
+    assert refreshed.status_code == 200
+
+
+def test_approved_code_survives_another_clients_authorization(http, settings, db):
+    client_id = register(http)
+    other_id = register(http, "other-client")
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE oauth_clients SET created_at = '2000-01-01T00:00:00Z' WHERE client_id = ?",
+            (client_id,),
+        )
+    verifier, challenge = pkce_pair()
+    params = {
+        "client_id": client_id, "response_type": "code", "code_challenge": challenge,
+        "code_challenge_method": "S256", "redirect_uri": CALLBACK, "scope": "jev",
+        "resource": settings.mcp_url,
+    }
+    authorize = http.get("/authorize", params=params, follow_redirects=False)
+    request_id = authorize.headers["location"].split("request=", 1)[1]
+    approved = http.post(
+        "/consent", data={"request": request_id, "password": settings.owner_password}, follow_redirects=False
+    )
+    code = approved.headers["location"].split("code=", 1)[1].split("&", 1)[0]
+    other = http.get("/authorize", params={**params, "client_id": other_id}, follow_redirects=False)
+    assert other.status_code == 302
+    exchanged = http.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+            "client_id": client_id, "redirect_uri": CALLBACK,
+        },
+    )
+    assert exchanged.status_code == 200, exchanged.text
+
+
 def test_metadata_endpoints(http, settings):
     auth_meta = http.get("/.well-known/oauth-authorization-server").json()
     assert auth_meta["issuer"].rstrip("/") == settings.public_url
