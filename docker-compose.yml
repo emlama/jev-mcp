@@ -1,0 +1,13 @@
+services:
+  jev-mcp:
+    build: .
+    image: jev-mcp:latest
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - jev_data:/data
+    restart: unless-stopped
+
+volumes:
+  jev_data:
